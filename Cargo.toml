@@ -1,0 +1,17 @@
+[package]
+name = "vulkan-raytracing"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+ash = "*"
+ash-window = "*"
+bytemuck = "*"
+glam = "*"
+png = "*"
+rand = "*"
+raw-window-handle = "*"
+glfw = "*"
+
+[build-dependencies]
+shaderc = "*"
