@@ -429,7 +429,7 @@ impl WindowedResources {
     }
 
     /// 销毁窗口模式资源
-    pub unsafe fn destroy(self, device: &ash::Device) {
+    pub unsafe fn destroy(self, device: &ash::Device) { unsafe {
         device.destroy_semaphore(self.image_available_semaphore, None);
         device.destroy_semaphore(self.render_finished_semaphore, None);
         device.destroy_fence(self.in_flight_fence, None);
@@ -442,7 +442,7 @@ impl WindowedResources {
         }
         device.destroy_render_pass(self.render_pass, None);
         self.swapchain.destroy(device);
-    }
+    }}
 }
 
 /// 渲染到 swapchain

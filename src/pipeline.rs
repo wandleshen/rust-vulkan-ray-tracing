@@ -24,13 +24,13 @@ pub struct RayTracingPipelineResources {
 
 impl RayTracingPipelineResources {
     /// 销毁管线资源
-    pub unsafe fn destroy(self, device: &Device) {
+    pub unsafe fn destroy(self, device: &Device) { unsafe {
         device.destroy_descriptor_pool(self.descriptor_pool, None);
         self.shader_binding_table_buffer.destroy(device);
         device.destroy_pipeline(self.pipeline, None);
         device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
         device.destroy_pipeline_layout(self.pipeline_layout, None);
-    }
+    }}
 }
 
 /// 创建 Descriptor Set Layout

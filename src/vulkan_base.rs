@@ -14,7 +14,7 @@ pub unsafe extern "system" fn default_vulkan_debug_utils_callback(
     message_type: vk::DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _p_user_data: *mut c_void,
-) -> vk::Bool32 {
+) -> vk::Bool32 { unsafe {
     let severity = match message_severity {
         vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => "[Verbose]",
         vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => "[Warning]",
@@ -32,12 +32,12 @@ pub unsafe extern "system" fn default_vulkan_debug_utils_callback(
     println!("[Debug]{}{}{:?}", severity, types, message);
 
     vk::FALSE
-}
+}}
 
 pub unsafe fn check_validation_layer_support<'a>(
     entry: &Entry,
     required_validation_layers: impl IntoIterator<Item = &'a CStr>,
-) -> VkResult<bool> {
+) -> VkResult<bool> { unsafe {
     let supported_layers: HashSet<CString> = entry
         .enumerate_instance_layer_properties()?
         .into_iter()
@@ -47,7 +47,7 @@ pub unsafe fn check_validation_layer_support<'a>(
     Ok(required_validation_layers
         .into_iter()
         .all(|l| supported_layers.contains(l)))
-}
+}}
 
 pub fn pick_physical_device_and_queue_family_indices(
     instance: &Instance,
@@ -85,7 +85,7 @@ pub fn pick_physical_device_and_queue_family_indices(
         }))
 }
 
-pub unsafe fn create_shader_module(device: &Device, code: &[u8]) -> VkResult<vk::ShaderModule> {
+pub unsafe fn create_shader_module(device: &Device, code: &[u8]) -> VkResult<vk::ShaderModule> { unsafe {
     let shader_module_create_info = vk::ShaderModuleCreateInfo {
         s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
         p_next: std::ptr::null(),
@@ -96,7 +96,7 @@ pub unsafe fn create_shader_module(device: &Device, code: &[u8]) -> VkResult<vk:
     };
 
     device.create_shader_module(&shader_module_create_info, None)
-}
+}}
 
 /// 创建 Vulkan Instance
 pub fn create_instance(
@@ -160,7 +160,11 @@ pub fn create_device(
     let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
         .shader_int8(true)
         .buffer_device_address(true)
-        .vulkan_memory_model(true);
+        .vulkan_memory_model(true)
+        .vulkan_memory_model_device_scope(true)
+        .timeline_semaphore(true)
+        .scalar_block_layout(true)
+        .storage_buffer8_bit_access(true);
 
     let mut as_feature = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
         .acceleration_structure(true);

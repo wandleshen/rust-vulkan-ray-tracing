@@ -73,11 +73,11 @@ impl RenderTargetImage {
     }
 
     /// 销毁渲染目标图像资源
-    pub unsafe fn destroy(self, device: &Device) {
+    pub unsafe fn destroy(self, device: &Device) { unsafe {
         device.destroy_image_view(self.view, None);
         device.destroy_image(self.image, None);
         device.free_memory(self.memory, None);
-    }
+    }}
 }
 
 /// 转换图像布局到 GENERAL

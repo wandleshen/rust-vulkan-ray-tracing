@@ -21,14 +21,14 @@ impl AccelerationStructureResources {
         self,
         device: &Device,
         acceleration_structure: &khr::acceleration_structure::Device,
-    ) {
+    ) { unsafe {
         acceleration_structure.destroy_acceleration_structure(self.top_as, None);
         self.top_as_buffer.destroy(device);
         acceleration_structure.destroy_acceleration_structure(self.bottom_as, None);
         self.bottom_as_buffer.destroy(device);
         self.aabb_buffer.destroy(device);
         self.instance_buffer.destroy(device);
-    }
+    }}
 }
 
 /// 创建 Bottom-Level 加速结构（球体 AABB）
