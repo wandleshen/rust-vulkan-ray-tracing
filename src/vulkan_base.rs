@@ -1,0 +1,146 @@
+use ash::prelude::VkResult;
+use ash::{Device, Entry, Instance, ext, khr, vk};
+use std::collections::HashSet;
+use std::ffi::{CStr, CString, c_void};
+use std::os::raw::c_char;
+
+pub struct ValidationLayerConfig {
+    pub layers: Vec<CString>,
+    pub enabled: bool,
+}
+
+impl ValidationLayerConfig {
+    /// 创建验证层配置（debug 模式启用，release 模式禁用）
+    pub fn new() -> Self {
+        #[cfg(debug_assertions)]
+        let layers = vec![CString::new("VK_LAYER_KHRONOS_validation").unwrap()];
+        #[cfg(not(debug_assertions))]
+        let layers = Vec::new();
+
+        let enabled = !layers.is_empty();
+        Self { layers, enabled }
+    }
+
+    /// 获取层名称指针列表
+    pub fn as_ptrs(&self) -> Vec<*const i8> {
+        self.layers.iter().map(|c_str| c_str.as_ptr()).collect()
+    }
+
+    /// 检查验证层是否支持
+    pub fn check_support(&self, entry: &Entry) -> VkResult<bool> {
+        if !self.enabled {
+            return Ok(true);
+        }
+        unsafe { check_validation_layer_support(entry, self.layers.iter().map(|c| c.as_c_str())) }
+    }
+}
+
+impl Default for ValidationLayerConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+pub unsafe extern "system" fn default_vulkan_debug_utils_callback(
+    message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
+    message_type: vk::DebugUtilsMessageTypeFlagsEXT,
+    p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
+    _p_user_data: *mut c_void,
+) -> vk::Bool32 {
+    unsafe {
+        let severity = match message_severity {
+            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => "[Verbose]",
+            vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => "[Warning]",
+            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => "[Error]",
+            vk::DebugUtilsMessageSeverityFlagsEXT::INFO => "[Info]",
+            _ => "[Unknown]",
+        };
+        let types = match message_type {
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL => "[General]",
+            vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE => "[Performance]",
+            vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION => "[Validation]",
+            _ => "[Unknown]",
+        };
+        let message = CStr::from_ptr((*p_callback_data).p_message);
+        println!("[Debug]{}{}{:?}", severity, types, message);
+
+        vk::FALSE
+    }
+}
+
+pub unsafe fn check_validation_layer_support<'a>(
+    entry: &Entry,
+    required_validation_layers: impl IntoIterator<Item = &'a CStr>,
+) -> VkResult<bool> {
+    unsafe {
+        let supported_layers: HashSet<CString> = entry
+            .enumerate_instance_layer_properties()?
+            .into_iter()
+            .map(|layer_property| CStr::from_ptr(layer_property.layer_name.as_ptr()).to_owned())
+            .collect();
+
+        Ok(required_validation_layers
+            .into_iter()
+            .all(|l| supported_layers.contains(l)))
+    }
+}
+
+pub fn get_instance_extensions(headless_mode: bool) -> Vec<*const i8> {
+    let mut instance_extensions: Vec<*const i8> = vec![ext::debug_utils::NAME.as_ptr()];
+    if !headless_mode {
+        instance_extensions.push(khr::surface::NAME.as_ptr());
+        #[cfg(target_os = "windows")]
+        instance_extensions.push(khr::win32_surface::NAME.as_ptr());
+        #[cfg(target_os = "linux")]
+        {
+            instance_extensions.push(khr::xlib_surface::NAME.as_ptr());
+            instance_extensions.push(khr::wayland_surface::NAME.as_ptr());
+        }
+        #[cfg(target_os = "macos")]
+        instance_extensions.push(ash::mvk::macos_surface::NAME.as_ptr());
+    }
+    instance_extensions
+}
+
+pub fn create_instance(
+    entry: &Entry,
+    validation_layers: &[*const i8],
+    instance_extensions: &[*const i8],
+    enable_validation: bool,
+) -> VkResult<Instance> {
+    let application_name =
+        CString::new("Vulkan Ray Tracing").expect("Failed to create application name");
+    let engine_name = CString::new("No Engine").expect("Failed to create engine name");
+
+    let mut debug_utils_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
+        .message_severity(
+            vk::DebugUtilsMessageSeverityFlagsEXT::WARNING
+                | vk::DebugUtilsMessageSeverityFlagsEXT::ERROR,
+        )
+        .message_type(
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL
+                | vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE
+                | vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION,
+        )
+        .pfn_user_callback(Some(default_vulkan_debug_utils_callback));
+
+    let application_info = vk::ApplicationInfo::default()
+        .application_name(application_name.as_c_str())
+        .application_version(vk::make_api_version(0, 1, 0, 0))
+        .engine_name(engine_name.as_c_str())
+        .engine_version(vk::make_api_version(0, 1, 0, 0))
+        .api_version(vk::API_VERSION_1_3);
+
+    let instance_create_info = vk::InstanceCreateInfo::default()
+        .application_info(&application_info)
+        .enabled_layer_names(validation_layers)
+        .enabled_extension_names(instance_extensions);
+
+    let instance_create_info: vk::InstanceCreateInfo<'_> = if enable_validation {
+        instance_create_info.push_next(&mut debug_utils_create_info)
+    } else {
+        instance_create_info
+    };
+
+    unsafe { entry.create_instance(&instance_create_info, None) }
+}
