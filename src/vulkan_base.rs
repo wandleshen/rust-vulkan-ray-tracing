@@ -144,3 +144,129 @@ pub fn create_instance(
 
     unsafe { entry.create_instance(&instance_create_info, None) }
 }
+
+/// 队列族索引
+#[derive(Default, Clone, Copy, Debug)]
+pub struct QueueFamilyIndices {
+    pub graphics_family: Option<u32>,
+    pub compute_family: Option<u32>,
+    pub present_family: Option<u32>,
+}
+
+impl QueueFamilyIndices {
+    /// 检查是否满足要求
+    /// - need_compute: 是否需要 compute 队列
+    /// - need_present: 是否需要 present 队列
+    pub fn is_complete(&self, need_compute: bool, need_present: bool) -> bool {
+        let has_graphics = self.graphics_family.is_some();
+        let has_compute = !need_compute || self.compute_family.is_some();
+        let has_present = !need_present || self.present_family.is_some();
+        has_graphics && has_compute && has_present
+    }
+
+    /// 获取唯一的队列族索引列表（用于创建设备时避免重复）
+    pub fn unique_families(&self) -> Vec<u32> {
+        let mut families = Vec::new();
+        if let Some(g) = self.graphics_family {
+            families.push(g);
+        }
+        if let Some(c) = self.compute_family {
+            if !families.contains(&c) {
+                families.push(c);
+            }
+        }
+        if let Some(p) = self.present_family {
+            if !families.contains(&p) {
+                families.push(p);
+            }
+        }
+        families
+    }
+}
+
+pub fn pick_physical_device_and_queue_family_indices(
+    instance: &Instance,
+    surface_loader: Option<&khr::surface::Instance>,
+    surface: Option<vk::SurfaceKHR>,
+    extensions: &[&CStr],
+    need_compute: bool,
+) -> VkResult<Option<(vk::PhysicalDevice, QueueFamilyIndices)>> {
+    let need_present = surface.is_some();
+
+    Ok(unsafe { instance.enumerate_physical_devices() }?
+        .into_iter()
+        .find_map(|physical_device| {
+            // 检查设备扩展支持
+            if unsafe { instance.enumerate_device_extension_properties(physical_device) }.map(
+                |exts| {
+                    let set: HashSet<&CStr> = exts
+                        .iter()
+                        .map(|ext| unsafe { CStr::from_ptr(&ext.extension_name as *const c_char) })
+                        .collect();
+
+                    extensions.iter().all(|ext| set.contains(ext))
+                },
+            ) != Ok(true)
+            {
+                return None;
+            }
+
+            let queue_families =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
+
+            let mut indices = QueueFamilyIndices::default();
+
+            // 查找图形队列族
+            if let Some(graphics_index) = queue_families
+                .iter()
+                .enumerate()
+                .find(|(_, properties)| {
+                    properties.queue_count > 0
+                        && properties.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                })
+                .map(|(i, _)| i as u32)
+            {
+                indices.graphics_family = Some(graphics_index);
+            }
+
+            // 查找计算队列族
+            if need_compute {
+                if let Some(compute_index) = queue_families
+                    .iter()
+                    .enumerate()
+                    .find(|(_, properties)| {
+                        properties.queue_count > 0
+                            && properties.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    })
+                    .map(|(i, _)| i as u32)
+                {
+                    indices.compute_family = Some(compute_index);
+                }
+            }
+
+            // 查找呈现队列族
+            if let (Some(loader), Some(surf)) = (surface_loader, surface) {
+                if let Some(present_index) = queue_families
+                    .iter()
+                    .enumerate()
+                    .find(|(i, _)| {
+                        unsafe {
+                            loader
+                                .get_physical_device_surface_support(physical_device, *i as u32, surf)
+                                .unwrap_or(false)
+                        }
+                    })
+                    .map(|(i, _)| i as u32)
+                {
+                    indices.present_family = Some(present_index);
+                }
+            }
+
+            // 检查是否满足要求
+            if indices.is_complete(need_compute, need_present) {
+                Some((physical_device, indices))
+            } else {
+                None
+            }
+        }))
+}
