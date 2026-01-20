@@ -270,3 +270,58 @@ pub fn pick_physical_device_and_queue_family_indices(
             }
         }))
 }
+
+pub fn create_device(
+    instance: &Instance,
+    physical_device: vk::PhysicalDevice,
+    queue_indices: &QueueFamilyIndices,
+    headless_mode: bool,
+) -> VkResult<Device> {
+    let priorities = [1.0];
+
+    // 为每个唯一的队列族创建 QueueCreateInfo
+    let queue_create_infos: Vec<vk::DeviceQueueCreateInfo> = queue_indices
+        .unique_families()
+        .iter()
+        .map(|&index| {
+            vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(index)
+                .queue_priorities(&priorities)
+        })
+        .collect();
+
+    let mut features2 = vk::PhysicalDeviceFeatures2::default();
+
+    let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
+        .buffer_device_address(true)
+        .scalar_block_layout(true);
+
+    let mut as_feature = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
+        .acceleration_structure(true);
+
+    let mut raytracing_pipeline =
+        vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
+
+    let mut enabled_extension_names = vec![
+        vk::KHR_RAY_TRACING_PIPELINE_NAME.as_ptr(),
+        vk::KHR_ACCELERATION_STRUCTURE_NAME.as_ptr(),
+        vk::KHR_DEFERRED_HOST_OPERATIONS_NAME.as_ptr(),
+        vk::KHR_SPIRV_1_4_NAME.as_ptr(),
+        vk::EXT_SCALAR_BLOCK_LAYOUT_NAME.as_ptr(),
+    ];
+
+    // 窗口模式需要 swapchain 扩展
+    if !headless_mode {
+        enabled_extension_names.push(vk::KHR_SWAPCHAIN_NAME.as_ptr());
+    }
+
+    let device_create_info = vk::DeviceCreateInfo::default()
+        .push_next(&mut features2)
+        .push_next(&mut features12)
+        .push_next(&mut as_feature)
+        .push_next(&mut raytracing_pipeline)
+        .queue_create_infos(&queue_create_infos)
+        .enabled_extension_names(&enabled_extension_names);
+
+    unsafe { instance.create_device(physical_device, &device_create_info, None) }
+}
