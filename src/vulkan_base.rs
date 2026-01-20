@@ -295,16 +295,10 @@ pub fn create_device(
         .collect();
 
     let mut features2 = vk::PhysicalDeviceFeatures2::default();
-    unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
 
     let mut features12 = vk::PhysicalDeviceVulkan12Features::default()
-        .shader_int8(true)
         .buffer_device_address(true)
-        .vulkan_memory_model(true)
-        .vulkan_memory_model_device_scope(true)
-        .timeline_semaphore(true)
-        .scalar_block_layout(true)
-        .storage_buffer8_bit_access(true);
+        .scalar_block_layout(true);
 
     let mut as_feature = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
         .acceleration_structure(true);
@@ -318,7 +312,6 @@ pub fn create_device(
         vk::KHR_DEFERRED_HOST_OPERATIONS_NAME.as_ptr(),
         vk::KHR_SPIRV_1_4_NAME.as_ptr(),
         vk::EXT_SCALAR_BLOCK_LAYOUT_NAME.as_ptr(),
-        vk::KHR_GET_MEMORY_REQUIREMENTS2_NAME.as_ptr(),
     ];
 
     // 窗口模式需要 swapchain 扩展
