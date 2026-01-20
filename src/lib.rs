@@ -31,7 +31,7 @@ pub use vulkan_base::{
     allocate_command_buffer, check_validation_layer_support, create_command_pool, create_device,
     create_instance, create_shader_module, default_vulkan_debug_utils_callback,
     get_instance_extensions, get_rt_pipeline_properties, pick_physical_device_and_queue_family_indices,
-    submit_and_wait,
+    submit_and_wait, QueueFamilyIndices, ValidationLayerConfig,
 };
 
 // 窗口模块导出

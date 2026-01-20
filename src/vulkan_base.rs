@@ -8,6 +8,49 @@ use std::collections::HashSet;
 use std::ffi::{c_void, CStr, CString};
 use std::os::raw::c_char;
 
+/// 验证层配置
+pub struct ValidationLayerConfig {
+    pub layers: Vec<CString>,
+    pub enabled: bool,
+}
+
+impl ValidationLayerConfig {
+    /// 创建验证层配置（debug 模式启用，release 模式禁用）
+    pub fn new() -> Self {
+        #[cfg(debug_assertions)]
+        let layers = vec![CString::new("VK_LAYER_KHRONOS_validation").unwrap()];
+        #[cfg(not(debug_assertions))]
+        let layers = Vec::new();
+
+        let enabled = !layers.is_empty();
+        Self { layers, enabled }
+    }
+
+    /// 获取层名称指针列表
+    pub fn as_ptrs(&self) -> Vec<*const i8> {
+        self.layers.iter().map(|c_str| c_str.as_ptr()).collect()
+    }
+
+    /// 检查验证层是否支持
+    pub fn check_support(&self, entry: &Entry) -> VkResult<bool> {
+        if !self.enabled {
+            return Ok(true);
+        }
+        unsafe {
+            check_validation_layer_support(
+                entry,
+                self.layers.iter().map(|c| c.as_c_str()),
+            )
+        }
+    }
+}
+
+impl Default for ValidationLayerConfig {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 /// Vulkan 调试回调
 pub unsafe extern "system" fn default_vulkan_debug_utils_callback(
     message_severity: vk::DebugUtilsMessageSeverityFlagsEXT,
@@ -49,13 +92,58 @@ pub unsafe fn check_validation_layer_support<'a>(
         .all(|l| supported_layers.contains(l)))
 }}
 
+/// 队列族索引
+#[derive(Default, Clone, Copy, Debug)]
+pub struct QueueFamilyIndices {
+    pub graphics_family: Option<u32>,
+    pub compute_family: Option<u32>,
+    pub present_family: Option<u32>,
+}
+
+impl QueueFamilyIndices {
+    /// 检查是否满足要求
+    /// - need_compute: 是否需要 compute 队列
+    /// - need_present: 是否需要 present 队列
+    pub fn is_complete(&self, need_compute: bool, need_present: bool) -> bool {
+        let has_graphics = self.graphics_family.is_some();
+        let has_compute = !need_compute || self.compute_family.is_some();
+        let has_present = !need_present || self.present_family.is_some();
+        has_graphics && has_compute && has_present
+    }
+
+    /// 获取唯一的队列族索引列表（用于创建设备时避免重复）
+    pub fn unique_families(&self) -> Vec<u32> {
+        let mut families = Vec::new();
+        if let Some(g) = self.graphics_family {
+            families.push(g);
+        }
+        if let Some(c) = self.compute_family {
+            if !families.contains(&c) {
+                families.push(c);
+            }
+        }
+        if let Some(p) = self.present_family {
+            if !families.contains(&p) {
+                families.push(p);
+            }
+        }
+        families
+    }
+}
+
 pub fn pick_physical_device_and_queue_family_indices(
     instance: &Instance,
+    surface_loader: Option<&khr::surface::Instance>,
+    surface: Option<vk::SurfaceKHR>,
     extensions: &[&CStr],
-) -> VkResult<Option<(vk::PhysicalDevice, u32)>> {
+    need_compute: bool,
+) -> VkResult<Option<(vk::PhysicalDevice, QueueFamilyIndices)>> {
+    let need_present = surface.is_some();
+
     Ok(unsafe { instance.enumerate_physical_devices() }?
         .into_iter()
         .find_map(|physical_device| {
+            // 检查设备扩展支持
             if unsafe { instance.enumerate_device_extension_properties(physical_device) }.map(
                 |exts| {
                     let set: HashSet<&CStr> = exts
@@ -70,18 +158,63 @@ pub fn pick_physical_device_and_queue_family_indices(
                 return None;
             }
 
-            let graphics_family =
-                unsafe { instance.get_physical_device_queue_family_properties(physical_device) }
-                    .into_iter()
-                    .enumerate()
-                    .find(|(_, device_properties)| {
-                        device_properties.queue_count > 0
-                            && device_properties
-                                .queue_flags
-                                .contains(vk::QueueFlags::GRAPHICS)
-                    });
+            let queue_families =
+                unsafe { instance.get_physical_device_queue_family_properties(physical_device) };
 
-            graphics_family.map(|(i, _)| (physical_device, i as u32))
+            let mut indices = QueueFamilyIndices::default();
+
+            // 查找图形队列族
+            if let Some(graphics_index) = queue_families
+                .iter()
+                .enumerate()
+                .find(|(_, properties)| {
+                    properties.queue_count > 0
+                        && properties.queue_flags.contains(vk::QueueFlags::GRAPHICS)
+                })
+                .map(|(i, _)| i as u32)
+            {
+                indices.graphics_family = Some(graphics_index);
+            }
+
+            // 查找计算队列族（光线追踪等场景需要）
+            if need_compute {
+                if let Some(compute_index) = queue_families
+                    .iter()
+                    .enumerate()
+                    .find(|(_, properties)| {
+                        properties.queue_count > 0
+                            && properties.queue_flags.contains(vk::QueueFlags::COMPUTE)
+                    })
+                    .map(|(i, _)| i as u32)
+                {
+                    indices.compute_family = Some(compute_index);
+                }
+            }
+
+            // 查找呈现队列族（如果有 surface）
+            if let (Some(loader), Some(surf)) = (surface_loader, surface) {
+                if let Some(present_index) = queue_families
+                    .iter()
+                    .enumerate()
+                    .find(|(i, _)| {
+                        unsafe {
+                            loader
+                                .get_physical_device_surface_support(physical_device, *i as u32, surf)
+                                .unwrap_or(false)
+                        }
+                    })
+                    .map(|(i, _)| i as u32)
+                {
+                    indices.present_family = Some(present_index);
+                }
+            }
+
+            // 检查是否满足要求
+            if indices.is_complete(need_compute, need_present) {
+                Some((physical_device, indices))
+            } else {
+                None
+            }
         }))
 }
 
@@ -132,7 +265,7 @@ pub fn create_instance(
         .enabled_layer_names(validation_layers)
         .enabled_extension_names(instance_extensions);
 
-    let instance_create_info = if enable_validation {
+    let instance_create_info: vk::InstanceCreateInfo<'_> = if enable_validation {
         instance_create_info.push_next(&mut debug_utils_create_info)
     } else {
         instance_create_info
@@ -145,14 +278,21 @@ pub fn create_instance(
 pub fn create_device(
     instance: &Instance,
     physical_device: vk::PhysicalDevice,
-    queue_family_index: u32,
+    queue_indices: &QueueFamilyIndices,
     headless_mode: bool,
 ) -> VkResult<Device> {
     let priorities = [1.0];
 
-    let queue_create_info = vk::DeviceQueueCreateInfo::default()
-        .queue_family_index(queue_family_index)
-        .queue_priorities(&priorities);
+    // 为每个唯一的队列族创建 QueueCreateInfo
+    let queue_create_infos: Vec<vk::DeviceQueueCreateInfo> = queue_indices
+        .unique_families()
+        .iter()
+        .map(|&index| {
+            vk::DeviceQueueCreateInfo::default()
+                .queue_family_index(index)
+                .queue_priorities(&priorities)
+        })
+        .collect();
 
     let mut features2 = vk::PhysicalDeviceFeatures2::default();
     unsafe { instance.get_physical_device_features2(physical_device, &mut features2) };
@@ -171,8 +311,6 @@ pub fn create_device(
 
     let mut raytracing_pipeline =
         vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);
-
-    let queue_create_infos = [queue_create_info];
 
     let mut enabled_extension_names = vec![
         vk::KHR_RAY_TRACING_PIPELINE_NAME.as_ptr(),

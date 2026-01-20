@@ -4,7 +4,7 @@
 
 use vulkan_raytracing::*;
 
-use std::{ffi::CString, thread, time::Duration};
+use std::{thread, time::Duration};
 
 use ash::{khr, vk};
 use rand::prelude::*;
@@ -16,7 +16,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const PREVIEW_INTERVAL: u32 = 1; // 窗口模式下每多少个sample更新一次显示
     const FRAME_DELAY_MS: u64 = 0; // 每帧之间的延迟（毫秒），0 表示无延迟
 
-    const ENABLE_VALIDATION_LAYER: bool = false;
     const WIDTH: u32 = 1200;
     const HEIGHT: u32 = 800;
     const COLOR_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
@@ -25,25 +24,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     const N_SAMPLES_ITER: u32 = 100;
 
     // ========== 验证层设置 ==========
-    let validation_layers: Vec<CString> = if ENABLE_VALIDATION_LAYER {
-        vec![CString::new("VK_LAYER_KHRONOS_validation")?]
-    } else {
-        Vec::new()
-    };
-    let validation_layers_ptr: Vec<*const i8> =
-        validation_layers.iter().map(|c_str| c_str.as_ptr()).collect();
-
+    let validation = ValidationLayerConfig::new();
     let entry = unsafe { ash::Entry::load() }?;
-
-    assert_eq!(
-        unsafe {
-            check_validation_layer_support(
-                &entry,
-                validation_layers.iter().map(|cstring| cstring.as_c_str()),
-            )
-        },
-        Ok(true)
-    );
+    assert!(validation.check_support(&entry)?, "Validation layer not supported");
 
     // ========== GLFW 初始化 ==========
     let mut glfw = glfw::init(glfw::fail_on_errors).ok();
@@ -63,9 +46,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let instance_extensions = get_instance_extensions(HEADLESS_MODE);
     let instance = create_instance(
         &entry,
-        &validation_layers_ptr,
+        &validation.as_ptrs(),
         &instance_extensions,
-        ENABLE_VALIDATION_LAYER,
+        validation.enabled,
     )?;
 
     // ========== Surface 创建 ==========
@@ -91,25 +74,30 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     // ========== 物理设备和队列族选择 ==========
-    let (physical_device, queue_family_index) = pick_physical_device_and_queue_family_indices(
+    let (physical_device, queue_indices) = pick_physical_device_and_queue_family_indices(
         &instance,
+        surface_loader.as_ref(),
+        surface,
         &[
             khr::acceleration_structure::NAME,
             khr::deferred_host_operations::NAME,
             khr::ray_tracing_pipeline::NAME,
         ],
+        true, // need_compute: 光线追踪需要 compute 队列
     )?
     .ok_or("No suitable physical device found")?;
 
+    let graphics_queue_index = queue_indices.graphics_family.unwrap();
+
     // ========== 逻辑设备创建 ==========
-    let device = create_device(&instance, physical_device, queue_family_index, HEADLESS_MODE)?;
+    let device = create_device(&instance, physical_device, &queue_indices, HEADLESS_MODE)?;
 
     let rt_pipeline_properties = get_rt_pipeline_properties(&instance, physical_device);
     let acceleration_structure = khr::acceleration_structure::Device::new(&instance, &device);
     let rt_pipeline = khr::ray_tracing_pipeline::Device::new(&instance, &device);
 
-    let graphics_queue = unsafe { device.get_device_queue(queue_family_index, 0) };
-    let command_pool = create_command_pool(&device, queue_family_index)?;
+    let graphics_queue = unsafe { device.get_device_queue(graphics_queue_index, 0) };
+    let command_pool = create_command_pool(&device, graphics_queue_index)?;
 
     let device_memory_properties =
         unsafe { instance.get_physical_device_memory_properties(physical_device) };
