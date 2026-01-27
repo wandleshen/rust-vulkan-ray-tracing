@@ -1,5 +1,6 @@
 use vulkan_raytracing::*;
 use ash::khr;
+use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     // ========== 渲染配置 ==========
@@ -48,11 +49,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     println!("Vulkan Instance created successfully");
 
+    // ========== Surface 创建 ==========
+    let surface_loader = if !HEADLESS_MODE {
+        Some(khr::surface::Instance::new(&entry, &instance))
+    } else {
+        None
+    };
+
+    let surface = if !HEADLESS_MODE {
+        let win = window.as_ref().unwrap();
+        Some(unsafe {
+            ash_window::create_surface(
+                &entry,
+                &instance,
+                win.display_handle().expect("Failed to get display handle").as_raw(),
+                win.window_handle().expect("Failed to get window handle").as_raw(),
+                None,
+            )?
+        })
+    } else {
+        None
+    };
+
+    if surface.is_some() {
+        println!("Surface created successfully");
+    }
+
     // ========== 物理设备和队列族选择 ==========
     let (physical_device, queue_indices) = pick_physical_device_and_queue_family_indices(
         &instance,
-        None,
-        None,
+        surface_loader.as_ref(),
+        surface,
         &[
             khr::acceleration_structure::NAME,
             khr::deferred_host_operations::NAME,
@@ -88,6 +115,29 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let graphics_queue = unsafe { device.get_device_queue(graphics_queue_index, 0) };
     println!("Graphics queue obtained: {:?}", graphics_queue);
 
+    // ========== Swapchain 创建 ==========
+    let swapchain = if !HEADLESS_MODE && surface.is_some() {
+        let sc = Swapchain::new(
+            &instance,
+            &device,
+            physical_device,
+            surface.unwrap(),
+            surface_loader.as_ref().unwrap(),
+            WIDTH,
+            HEIGHT,
+        )?;
+        println!(
+            "Swapchain created: format={:?}, extent={}x{}, images={}",
+            sc.format,
+            sc.extent.width,
+            sc.extent.height,
+            sc.images.len()
+        );
+        Some(sc)
+    } else {
+        None
+    };
+
     // ========== 主循环 ==========
     while !HEADLESS_MODE {
         glfw.poll_events();
@@ -106,8 +156,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe {
         device.device_wait_idle()?;
 
+        // 销毁 Swapchain
+        if let Some(sc) = swapchain {
+            sc.destroy(&device);
+        }
+
         // 销毁逻辑设备
         device.destroy_device(None);
+
+        // 销毁 Surface
+        if let Some(s) = surface {
+            if let Some(loader) = surface_loader.as_ref() {
+                loader.destroy_surface(s, None);
+            }
+        }
 
         // 销毁 Instance
         instance.destroy_instance(None);
