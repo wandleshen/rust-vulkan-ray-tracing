@@ -1,5 +1,5 @@
 use ash::util::Align;
-use ash::{vk, Device};
+use ash::{Device, vk};
 
 /// Buffer 资源管理
 #[derive(Clone)]
@@ -84,10 +84,12 @@ impl BufferResource {
         }
     }
 
-    pub unsafe fn destroy(self, device: &Device) { unsafe {
-        device.destroy_buffer(self.buffer, None);
-        device.free_memory(self.memory, None);
-    }}
+    pub unsafe fn destroy(self, device: &Device) {
+        unsafe {
+            device.destroy_buffer(self.buffer, None);
+            device.free_memory(self.memory, None);
+        }
+    }
 }
 
 pub fn get_memory_type_index(
@@ -111,7 +113,9 @@ pub fn aligned_size(value: u32, alignment: u32) -> u32 {
     (value + alignment - 1) & !(alignment - 1)
 }
 
-pub unsafe fn get_buffer_device_address(device: &Device, buffer: vk::Buffer) -> u64 { unsafe {
-    let buffer_device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
-    device.get_buffer_device_address(&buffer_device_address_info)
-}}
+pub unsafe fn get_buffer_device_address(device: &Device, buffer: vk::Buffer) -> u64 {
+    unsafe {
+        let buffer_device_address_info = vk::BufferDeviceAddressInfo::default().buffer(buffer);
+        device.get_buffer_device_address(&buffer_device_address_info)
+    }
+}

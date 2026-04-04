@@ -4,7 +4,9 @@
 
 pub mod acceleration_structure;
 pub mod buffer;
+pub mod camera;
 pub mod image_utils;
+pub mod light;
 pub mod material;
 pub mod pipeline;
 pub mod scene;
@@ -12,43 +14,49 @@ pub mod vulkan_base;
 pub mod windowed;
 
 // Buffer 模块导出
-pub use buffer::{aligned_size, get_buffer_device_address, get_memory_type_index, BufferResource};
+pub use buffer::{BufferResource, aligned_size, get_buffer_device_address, get_memory_type_index};
+
+// 相机模块导出
+pub use camera::{CameraState, FrameUniform};
+
+// 灯光模块导出
+pub use light::{DemoLightState, LightMode, LightUniform, default_demo_light, key_to_light_mode};
 
 // 图像工具导出
 pub use image_utils::{
-    copy_image_to_host, create_host_visible_image, save_image_to_png, transition_image_to_general,
-    RenderTargetImage,
+    RenderTargetImage, copy_image_to_host, create_host_visible_image, save_image_to_png,
+    transition_image_to_general,
 };
 
 // 材质导出
-pub use material::EnumMaterial;
+pub use material::Material;
 
 // 场景导出
 pub use scene::{create_sphere_instance, sample_scene};
 
 // Vulkan 基础设施导出
 pub use vulkan_base::{
-    allocate_command_buffer, check_validation_layer_support, create_command_pool, create_device,
-    create_instance, create_shader_module, default_vulkan_debug_utils_callback,
-    get_instance_extensions, get_rt_pipeline_properties, pick_physical_device_and_queue_family_indices,
-    submit_and_wait, QueueFamilyIndices, ValidationLayerConfig,
+    QueueFamilyIndices, ValidationLayerConfig, allocate_command_buffer,
+    check_validation_layer_support, create_command_pool, create_device, create_instance,
+    create_shader_module, default_vulkan_debug_utils_callback, get_instance_extensions,
+    get_rt_pipeline_properties, pick_physical_device_and_queue_family_indices, submit_and_wait,
 };
 
 // 窗口模块导出
 pub use windowed::{
-    check_surface_support, create_blit_pipeline, create_framebuffers, create_render_pass,
-    render_to_swapchain, Swapchain, WindowedResources,
+    Swapchain, WindowedResources, check_surface_support, create_blit_pipeline, create_framebuffers,
+    create_render_pass, render_to_swapchain,
 };
 
 // 加速结构导出
 pub use acceleration_structure::{
-    create_bottom_level_as, create_instance_buffer, create_top_level_as,
-    get_acceleration_structure_device_address, AccelerationStructureResources,
+    AccelerationStructureResources, create_bottom_level_as, create_instance_buffer,
+    create_top_level_as, get_acceleration_structure_device_address,
 };
 
 // 管线导出
 pub use pipeline::{
-    create_descriptor_pool_and_set, create_descriptor_set_layout, create_material_buffer,
-    create_ray_tracing_pipeline, create_shader_binding_table, update_descriptor_set,
-    RayTracingPipelineResources,
+    RayTracingPipelineResources, create_descriptor_pool_and_set, create_descriptor_set_layout,
+    create_material_buffer, create_ray_tracing_pipeline, create_shader_binding_table,
+    update_descriptor_set,
 };

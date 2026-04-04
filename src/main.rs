@@ -1,48 +1,134 @@
 //! Vulkan Ray Tracing 主程序
-//!
-//! 实现基于 Vulkan 的实时光线追踪渲染
 
 use vulkan_raytracing::*;
 
-use std::{thread, time::Duration};
+use std::{
+    thread,
+    time::{Duration, Instant},
+};
 
 use ash::{khr, vk};
+use glam::{Vec3, vec3};
+use glfw::{Action, CursorMode, Key};
 use rand::prelude::*;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
+const HEADLESS_MODE: bool = false;
+const FRAME_DELAY_MS: u64 = 0;
+
+const WIDTH: u32 = 1200;
+const HEIGHT: u32 = 800;
+const COLOR_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
+
+const N_SAMPLES: u32 = 5000;
+const N_SAMPLES_ITER: u32 = 100;
+const WINDOW_SAMPLES_PER_FRAME: u32 = 1;
+
+const CAMERA_MOVE_SPEED: f32 = 4.0;
+const CAMERA_BOOST_MULTIPLIER: f32 = 3.0;
+const CAMERA_MOUSE_SENSITIVITY: f32 = 0.0025;
+
+fn is_key_down(window: &glfw::PWindow, key: Key) -> bool {
+    matches!(window.get_key(key), Action::Press | Action::Repeat)
+}
+
+fn update_light_from_input(window: &glfw::PWindow, light_state: &mut DemoLightState) -> bool {
+    for key in [Key::Num1, Key::Num2, Key::Num3, Key::Num4] {
+        if is_key_down(window, key) {
+            if let Some(mode) = key_to_light_mode(key) {
+                if light_state.mode != mode {
+                    light_state.mode = mode;
+                    return true;
+                }
+            }
+        }
+    }
+
+    false
+}
+
+fn update_camera_from_input(
+    window: &glfw::PWindow,
+    camera: &mut CameraState,
+    delta_time: f32,
+    mouse_delta: (f32, f32),
+) -> bool {
+    let speed_multiplier =
+        if is_key_down(window, Key::LeftShift) || is_key_down(window, Key::RightShift) {
+            CAMERA_BOOST_MULTIPLIER
+        } else {
+            1.0
+        };
+    let move_step = CAMERA_MOVE_SPEED * speed_multiplier * delta_time.max(1.0 / 240.0);
+
+    let forward = camera.forward();
+    let right = camera.right();
+    let mut movement = Vec3::ZERO;
+
+    if is_key_down(window, Key::W) {
+        movement += forward;
+    }
+    if is_key_down(window, Key::S) {
+        movement -= forward;
+    }
+    if is_key_down(window, Key::D) {
+        movement += right;
+    }
+    if is_key_down(window, Key::A) {
+        movement -= right;
+    }
+    if is_key_down(window, Key::Space) {
+        movement += Vec3::Y;
+    }
+    if is_key_down(window, Key::LeftControl) || is_key_down(window, Key::RightControl) {
+        movement -= Vec3::Y;
+    }
+
+    let mut changed = false;
+    if movement.length_squared() > 0.0 {
+        camera.translate(movement.normalize() * move_step);
+        changed = true;
+    }
+
+    let (mouse_dx, mouse_dy) = mouse_delta;
+    if mouse_dx != 0.0 || mouse_dy != 0.0 {
+        camera.rotate(
+            mouse_dx * CAMERA_MOUSE_SENSITIVITY,
+            -mouse_dy * CAMERA_MOUSE_SENSITIVITY,
+        );
+        changed = true;
+    }
+
+    changed
+}
+
 fn main() -> Result<(), Box<dyn std::error::Error>> {
-    // ========== 渲染配置 ==========
-    const HEADLESS_MODE: bool = false; // true = 无头模式(输出PNG), false = 窗口模式(实时预览)
-    const PREVIEW_INTERVAL: u32 = 1; // 窗口模式下每多少个sample更新一次显示
-    const FRAME_DELAY_MS: u64 = 0; // 每帧之间的延迟（毫秒），0 表示无延迟
-
-    const WIDTH: u32 = 1200;
-    const HEIGHT: u32 = 800;
-    const COLOR_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
-
-    const N_SAMPLES: u32 = 5000;
-    const N_SAMPLES_ITER: u32 = 100;
-
-    // ========== 验证层设置 ==========
     let validation = ValidationLayerConfig::new();
     let entry = unsafe { ash::Entry::load() }?;
-    assert!(validation.check_support(&entry)?, "Validation layer not supported");
+    assert!(
+        validation.check_support(&entry)?,
+        "Validation layer not supported"
+    );
 
-    // ========== GLFW 初始化 ==========
     let mut glfw = glfw::init(glfw::fail_on_errors).ok();
     let window = if !HEADLESS_MODE {
         let g = glfw.as_mut().unwrap();
         g.window_hint(glfw::WindowHint::ClientApi(glfw::ClientApiHint::NoApi));
         g.window_hint(glfw::WindowHint::Resizable(false));
-        let (win, _events) = g
-            .create_window(WIDTH, HEIGHT, "Vulkan Ray Tracing", glfw::WindowMode::Windowed)
+        let (mut win, _events) = g
+            .create_window(
+                WIDTH,
+                HEIGHT,
+                "Vulkan Ray Tracing",
+                glfw::WindowMode::Windowed,
+            )
             .expect("Failed to create GLFW window");
+        win.set_cursor_mode(CursorMode::Disabled);
         Some(win)
     } else {
         None
     };
 
-    // ========== Vulkan Instance 创建 ==========
     let instance_extensions = get_instance_extensions(HEADLESS_MODE);
     let instance = create_instance(
         &entry,
@@ -51,7 +137,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         validation.enabled,
     )?;
 
-    // ========== Surface 创建 ==========
     let surface_loader = if !HEADLESS_MODE {
         Some(khr::surface::Instance::new(&entry, &instance))
     } else {
@@ -64,8 +149,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ash_window::create_surface(
                 &entry,
                 &instance,
-                win.display_handle().expect("Failed to get display handle").as_raw(),
-                win.window_handle().expect("Failed to get window handle").as_raw(),
+                win.display_handle()
+                    .expect("Failed to get display handle")
+                    .as_raw(),
+                win.window_handle()
+                    .expect("Failed to get window handle")
+                    .as_raw(),
                 None,
             )?
         })
@@ -73,7 +162,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // ========== 物理设备和队列族选择 ==========
     let (physical_device, queue_indices) = pick_physical_device_and_queue_family_indices(
         &instance,
         surface_loader.as_ref(),
@@ -83,13 +171,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             khr::deferred_host_operations::NAME,
             khr::ray_tracing_pipeline::NAME,
         ],
-        true, // need_compute: 光线追踪需要 compute 队列
+        true,
     )?
     .ok_or("No suitable physical device found")?;
 
     let graphics_queue_index = queue_indices.graphics_family.unwrap();
-
-    // ========== 逻辑设备创建 ==========
     let device = create_device(&instance, physical_device, &queue_indices, HEADLESS_MODE)?;
 
     let rt_pipeline_properties = get_rt_pipeline_properties(&instance, physical_device);
@@ -98,17 +184,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let graphics_queue = unsafe { device.get_device_queue(graphics_queue_index, 0) };
     let command_pool = create_command_pool(&device, graphics_queue_index)?;
-
     let device_memory_properties =
         unsafe { instance.get_physical_device_memory_properties(physical_device) };
 
-    // ========== 渲染目标图像创建 ==========
-    let render_target =
-        RenderTargetImage::new(&device, WIDTH, HEIGHT, COLOR_FORMAT, device_memory_properties)?;
-
+    let render_target = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
     transition_image_to_general(&device, command_pool, graphics_queue, render_target.image)?;
 
-    // ========== 加速结构创建 ==========
     let (bottom_as, bottom_as_buffer, aabb_buffer) = create_bottom_level_as(
         &device,
         &acceleration_structure,
@@ -121,7 +208,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         get_acceleration_structure_device_address(&acceleration_structure, bottom_as);
 
     let (sphere_instances, materials) = sample_scene(sphere_accel_handle);
-
     let instance_buffer =
         create_instance_buffer(&device, &sphere_instances, device_memory_properties);
 
@@ -135,15 +221,37 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         sphere_instances.len() as u32,
     )?;
 
-    // ========== 材质缓冲区 ==========
     let material_buffer = create_material_buffer(&device, &materials, device_memory_properties);
 
-    // ========== Ray Tracing 管线创建 ==========
-    let descriptor_set_layout = create_descriptor_set_layout(&device)?;
+    let mut camera =
+        CameraState::from_look_at(vec3(13.0, 2.0, 3.0), vec3(0.0, 0.0, 0.0), 20.0, 0.1);
+    camera.focus_distance = 10.0;
+    let mut demo_light = default_demo_light();
 
+    let mut frame_uniform_buffer = BufferResource::new(
+        std::mem::size_of::<FrameUniform>() as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        &device,
+        device_memory_properties,
+    );
+    frame_uniform_buffer.store(
+        &[camera.build_uniform(WIDTH as f32 / HEIGHT as f32)],
+        &device,
+    );
+
+    let mut light_uniform_buffer = BufferResource::new(
+        std::mem::size_of::<LightUniform>() as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
+        &device,
+        device_memory_properties,
+    );
+    light_uniform_buffer.store(&[demo_light.build_uniform()], &device);
+
+    let descriptor_set_layout = create_descriptor_set_layout(&device)?;
     let (pipeline, pipeline_layout, shader_groups_len) =
         create_ray_tracing_pipeline(&device, &rt_pipeline, descriptor_set_layout)?;
-
     let (descriptor_pool, descriptor_set) =
         create_descriptor_pool_and_set(&device, descriptor_set_layout)?;
 
@@ -153,9 +261,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         top_as,
         render_target.view,
         material_buffer.buffer,
+        frame_uniform_buffer.buffer,
+        light_uniform_buffer.buffer,
     );
 
-    // ========== Shader Binding Table ==========
     let (
         shader_binding_table_buffer,
         sbt_raygen_region,
@@ -171,81 +280,36 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         device_memory_properties,
     )?;
 
-    // ========== 渲染循环准备 ==========
+    let image_subresource_range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_mip_level(0)
+        .level_count(1)
+        .base_array_layer(0)
+        .layer_count(1);
+
     let image_barrier = vk::ImageMemoryBarrier::default()
-        .src_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
-        .dst_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
+        .src_access_mask(
+            vk::AccessFlags::SHADER_READ
+                | vk::AccessFlags::SHADER_WRITE
+                | vk::AccessFlags::MEMORY_READ
+                | vk::AccessFlags::MEMORY_WRITE,
+        )
+        .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
         .old_layout(vk::ImageLayout::GENERAL)
         .new_layout(vk::ImageLayout::GENERAL)
         .image(render_target.image)
-        .subresource_range(
-            vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1),
-        );
+        .subresource_range(image_subresource_range);
 
-    // 清除图像
-    {
-        let command_buffer = allocate_command_buffer(&device, command_pool)?;
-
-        unsafe {
-            device.begin_command_buffer(
-                command_buffer,
-                &vk::CommandBufferBeginInfo::default()
-                    .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE),
-            )?;
-
-            let range = vk::ImageSubresourceRange::default()
-                .aspect_mask(vk::ImageAspectFlags::COLOR)
-                .base_mip_level(0)
-                .level_count(1)
-                .base_array_layer(0)
-                .layer_count(1);
-
-            device.cmd_clear_color_image(
-                command_buffer,
-                render_target.image,
-                vk::ImageLayout::GENERAL,
-                &vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 0.0],
-                },
-                &[range],
-            );
-
-            let clear_barrier = vk::ImageMemoryBarrier::default()
-                .src_access_mask(vk::AccessFlags::COLOR_ATTACHMENT_WRITE)
-                .dst_access_mask(vk::AccessFlags::SHADER_WRITE | vk::AccessFlags::SHADER_READ)
-                .old_layout(vk::ImageLayout::GENERAL)
-                .new_layout(vk::ImageLayout::GENERAL)
-                .image(render_target.image)
-                .subresource_range(range);
-
-            device.cmd_pipeline_barrier(
-                command_buffer,
-                vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT,
-                vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                vk::DependencyFlags::empty(),
-                &[],
-                &[],
-                &[clear_barrier],
-            );
-
-            device.end_command_buffer(command_buffer)?;
-        }
-
-        submit_and_wait(&device, graphics_queue, command_buffer)?;
-        unsafe { device.free_command_buffers(command_pool, &[command_buffer]) };
-    }
-
-    let mut rng = StdRng::from_os_rng();
-    let mut sampled = 0u32;
+    let clear_barrier = vk::ImageMemoryBarrier::default()
+        .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+        .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+        .old_layout(vk::ImageLayout::GENERAL)
+        .new_layout(vk::ImageLayout::GENERAL)
+        .image(render_target.image)
+        .subresource_range(image_subresource_range);
 
     let command_buffer = allocate_command_buffer(&device, command_pool)?;
 
-    // ========== 窗口模式资源 ==========
     let windowed_resources = if !HEADLESS_MODE {
         Some(WindowedResources::new(
             &instance,
@@ -261,36 +325,104 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    // ========== 主渲染循环 ==========
+    let mut rng = StdRng::from_os_rng();
+    let mut sampled = 0u32;
     let mut should_close = false;
-    while sampled < N_SAMPLES && !should_close {
-        // 窗口模式：处理事件
+    let mut reset_accumulation = true;
+    let mut last_frame_time = Instant::now();
+    let mut last_cursor_pos: Option<(f64, f64)> = None;
+
+    eprintln!(
+        "Controls: WASD move, Space/Ctrl up-down, mouse look, 1/2/3/4 switch lights, Esc quit"
+    );
+    eprintln!("Active light: {}", demo_light.mode.label());
+
+    loop {
+        if should_close || (HEADLESS_MODE && sampled >= N_SAMPLES) {
+            break;
+        }
+
+        let delta_time = last_frame_time.elapsed().as_secs_f32();
+        last_frame_time = Instant::now();
+
         if !HEADLESS_MODE {
             let g = glfw.as_mut().unwrap();
             g.poll_events();
-            if window.as_ref().unwrap().should_close() {
+
+            let win = window.as_ref().unwrap();
+            if win.should_close() {
                 should_close = true;
                 continue;
             }
+
+            if is_key_down(win, Key::Escape) {
+                should_close = true;
+                continue;
+            }
+
+            let current_cursor_pos = win.get_cursor_pos();
+            let mouse_delta = if let Some((last_x, last_y)) = last_cursor_pos {
+                (
+                    (current_cursor_pos.0 - last_x) as f32,
+                    (current_cursor_pos.1 - last_y) as f32,
+                )
+            } else {
+                (0.0, 0.0)
+            };
+            last_cursor_pos = Some(current_cursor_pos);
+
+            if update_camera_from_input(win, &mut camera, delta_time, mouse_delta) {
+                sampled = 0;
+                reset_accumulation = true;
+            }
+
+            if update_light_from_input(win, &mut demo_light) {
+                sampled = 0;
+                reset_accumulation = true;
+                eprintln!("\nActive light: {}", demo_light.mode.label());
+            }
         }
 
-        let samples = std::cmp::min(
-            N_SAMPLES - sampled,
-            if HEADLESS_MODE {
-                N_SAMPLES_ITER
-            } else {
-                PREVIEW_INTERVAL
-            },
+        frame_uniform_buffer.store(
+            &[camera.build_uniform(WIDTH as f32 / HEIGHT as f32)],
+            &device,
         );
-        sampled += samples;
+        light_uniform_buffer.store(&[demo_light.build_uniform()], &device);
 
-        // 记录光线追踪命令
+        let samples = if HEADLESS_MODE {
+            std::cmp::min(N_SAMPLES - sampled, N_SAMPLES_ITER)
+        } else {
+            WINDOW_SAMPLES_PER_FRAME
+        };
+
         unsafe {
             device.begin_command_buffer(
                 command_buffer,
                 &vk::CommandBufferBeginInfo::default()
                     .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE),
             )?;
+
+            if reset_accumulation {
+                device.cmd_clear_color_image(
+                    command_buffer,
+                    render_target.image,
+                    vk::ImageLayout::GENERAL,
+                    &vk::ClearColorValue {
+                        float32: [0.0, 0.0, 0.0, 0.0],
+                    },
+                    &[image_subresource_range],
+                );
+
+                device.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::TRANSFER,
+                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &[clear_barrier],
+                );
+            }
 
             device.cmd_bind_pipeline(
                 command_buffer,
@@ -306,16 +438,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &[],
             );
 
-            for _ in 0..samples {
-                device.cmd_pipeline_barrier(
-                    command_buffer,
-                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                    vk::DependencyFlags::empty(),
-                    &[],
-                    &[],
-                    &[image_barrier],
-                );
+            for sample_index in 0..samples {
+                if !reset_accumulation || sample_index > 0 {
+                    device.cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &[image_barrier],
+                    );
+                }
 
                 device.cmd_push_constants(
                     command_buffer,
@@ -341,15 +475,16 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         submit_and_wait(&device, graphics_queue, command_buffer)?;
+        sampled += samples;
+        reset_accumulation = false;
 
-        // 窗口模式：渲染到 swapchain
         if let Some(ref resources) = windowed_resources {
             render_to_swapchain(
                 &device,
                 command_pool,
                 graphics_queue,
                 resources,
-                sampled,
+                sampled.max(1),
             )?;
 
             if FRAME_DELAY_MS > 0 {
@@ -357,10 +492,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        eprint!("\rSamples: {} / {} ", sampled, N_SAMPLES);
+        if HEADLESS_MODE {
+            eprint!("\rSamples: {} / {} ", sampled, N_SAMPLES);
+        } else {
+            eprint!("\rAccumulated Samples: {} ", sampled);
+        }
     }
 
-    // ========== 清理窗口模式资源 ==========
     if let Some(resources) = windowed_resources {
         unsafe {
             device.device_wait_idle()?;
@@ -371,9 +509,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     unsafe { device.free_command_buffers(command_pool, &[command_buffer]) };
     eprintln!("\nDone");
 
-    // ========== 导出 PNG ==========
-    let (dst_image, dst_device_memory) =
-        create_host_visible_image(&device, WIDTH, HEIGHT, COLOR_FORMAT, device_memory_properties)?;
+    let (dst_image, dst_device_memory) = create_host_visible_image(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
 
     copy_image_to_host(
         &device,
@@ -391,17 +533,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dst_image,
         WIDTH,
         HEIGHT,
-        N_SAMPLES,
+        sampled.max(1),
         "out.png",
     );
 
     unsafe {
         device.free_memory(dst_device_memory, None);
         device.destroy_image(dst_image, None);
-    }
 
-    // ========== 资源清理 ==========
-    unsafe {
         device.destroy_command_pool(command_pool, None);
         device.destroy_descriptor_pool(descriptor_pool, None);
         shader_binding_table_buffer.destroy(&device);
@@ -417,6 +556,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
         render_target.destroy(&device);
         material_buffer.destroy(&device);
+        frame_uniform_buffer.destroy(&device);
+        light_uniform_buffer.destroy(&device);
         instance_buffer.destroy(&device);
 
         device.destroy_device(None);

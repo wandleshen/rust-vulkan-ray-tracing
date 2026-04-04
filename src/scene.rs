@@ -1,6 +1,6 @@
-use crate::material::EnumMaterial;
+use crate::material::Material;
 use ash::vk;
-use glam::{vec3a, Vec3A};
+use glam::{Vec3A, vec3a};
 use rand::prelude::*;
 
 pub fn create_sphere_instance(
@@ -27,14 +27,14 @@ pub fn create_sphere_instance(
 
 pub fn sample_scene(
     sphere_accel_handle: u64,
-) -> (Vec<vk::AccelerationStructureInstanceKHR>, Vec<EnumMaterial>) {
+) -> (Vec<vk::AccelerationStructureInstanceKHR>, Vec<Material>) {
     let mut rng = StdRng::from_os_rng();
     let mut world = Vec::new();
 
     // 地面
     world.push((
         create_sphere_instance(vec3a(0.0, -1000.0, 0.0), 1000.0, sphere_accel_handle),
-        EnumMaterial::lambertian(vec3a(0.5, 0.5, 0.5)),
+        Material::diffuse(vec3a(0.5, 0.5, 0.5)),
     ));
 
     // 随机小球
@@ -56,7 +56,7 @@ pub fn sample_scene(
 
                         world.push((
                             create_sphere_instance(center, 0.3, sphere_accel_handle),
-                            EnumMaterial::lambertian(albedo),
+                            Material::diffuse(albedo),
                         ));
                     }
                     x if x < 0.95 => {
@@ -69,12 +69,12 @@ pub fn sample_scene(
 
                         world.push((
                             create_sphere_instance(center, 0.2, sphere_accel_handle),
-                            EnumMaterial::metal(albedo, fuzz),
+                            Material::metal(albedo, fuzz),
                         ));
                     }
                     _ => world.push((
                         create_sphere_instance(center, 0.2, sphere_accel_handle),
-                        EnumMaterial::dielectric(1.5),
+                        Material::dielectric(1.5),
                     )),
                 }
             }
@@ -84,17 +84,17 @@ pub fn sample_scene(
     // 三个大球
     world.push((
         create_sphere_instance(vec3a(0.0, 1.0, 0.0), 1.0, sphere_accel_handle),
-        EnumMaterial::dielectric(1.5),
+        Material::dielectric(1.5),
     ));
 
     world.push((
         create_sphere_instance(vec3a(-4.0, 1.0, 0.0), 1.0, sphere_accel_handle),
-        EnumMaterial::lambertian(vec3a(0.4, 0.2, 0.1)),
+        Material::diffuse(vec3a(0.4, 0.2, 0.1)),
     ));
 
     world.push((
         create_sphere_instance(vec3a(4.0, 1.0, 0.0), 1.0, sphere_accel_handle),
-        EnumMaterial::metal(vec3a(0.7, 0.6, 0.5), 0.0),
+        Material::metal(vec3a(0.7, 0.6, 0.5), 0.02),
     ));
 
     // 分离实例和材质

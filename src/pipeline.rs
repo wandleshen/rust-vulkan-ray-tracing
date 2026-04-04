@@ -2,10 +2,10 @@
 //!
 //! 包含 RT 管线创建、Descriptor Set 配置、Shader Binding Table 构建
 
-use ash::{khr, vk, Device};
+use ash::{Device, khr, vk};
 use std::ffi::CStr;
 
-use crate::buffer::{aligned_size, get_buffer_device_address, BufferResource};
+use crate::buffer::{BufferResource, aligned_size, get_buffer_device_address};
 use crate::vulkan_base::create_shader_module;
 
 /// Ray Tracing 管线资源
@@ -24,17 +24,21 @@ pub struct RayTracingPipelineResources {
 
 impl RayTracingPipelineResources {
     /// 销毁管线资源
-    pub unsafe fn destroy(self, device: &Device) { unsafe {
-        device.destroy_descriptor_pool(self.descriptor_pool, None);
-        self.shader_binding_table_buffer.destroy(device);
-        device.destroy_pipeline(self.pipeline, None);
-        device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
-        device.destroy_pipeline_layout(self.pipeline_layout, None);
-    }}
+    pub unsafe fn destroy(self, device: &Device) {
+        unsafe {
+            device.destroy_descriptor_pool(self.descriptor_pool, None);
+            self.shader_binding_table_buffer.destroy(device);
+            device.destroy_pipeline(self.pipeline, None);
+            device.destroy_descriptor_set_layout(self.descriptor_set_layout, None);
+            device.destroy_pipeline_layout(self.pipeline_layout, None);
+        }
+    }
 }
 
 /// 创建 Descriptor Set Layout
-pub fn create_descriptor_set_layout(device: &Device) -> Result<vk::DescriptorSetLayout, vk::Result> {
+pub fn create_descriptor_set_layout(
+    device: &Device,
+) -> Result<vk::DescriptorSetLayout, vk::Result> {
     let bindings = [
         vk::DescriptorSetLayoutBinding::default()
             .descriptor_count(1)
@@ -51,6 +55,16 @@ pub fn create_descriptor_set_layout(device: &Device) -> Result<vk::DescriptorSet
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
             .binding(2),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(3),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(4),
     ];
 
     unsafe {
@@ -180,7 +194,7 @@ pub fn create_descriptor_pool_and_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 1,
+            descriptor_count: 3,
         },
     ];
 
@@ -214,6 +228,8 @@ pub fn update_descriptor_set(
     top_as: vk::AccelerationStructureKHR,
     image_view: vk::ImageView,
     material_buffer: vk::Buffer,
+    frame_uniform_buffer: vk::Buffer,
+    light_uniform_buffer: vk::Buffer,
 ) {
     let accel_structs = [top_as];
     let mut accel_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
@@ -249,8 +265,39 @@ pub fn update_descriptor_set(
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&buffer_info);
 
+    let frame_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(frame_uniform_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let frame_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(3)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&frame_buffer_info);
+
+    let light_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(light_uniform_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let light_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(4)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&light_buffer_info);
+
     unsafe {
-        device.update_descriptor_sets(&[accel_write, image_write, buffers_write], &[]);
+        device.update_descriptor_sets(
+            &[
+                accel_write,
+                image_write,
+                buffers_write,
+                frame_write,
+                light_write,
+            ],
+            &[],
+        );
     }
 }
 

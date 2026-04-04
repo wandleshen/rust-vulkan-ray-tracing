@@ -1,9 +1,9 @@
 //! 加速结构（Acceleration Structure）构建模块
-//! 
+//!
 //! 包含 BLAS（Bottom-Level Acceleration Structure）和 TLAS（Top-Level Acceleration Structure）的构建逻辑
 
-use ash::{khr, vk, Device};
-use crate::buffer::{get_buffer_device_address, BufferResource};
+use crate::buffer::{BufferResource, get_buffer_device_address};
+use ash::{Device, khr, vk};
 
 /// 加速结构资源集合
 pub struct AccelerationStructureResources {
@@ -21,14 +21,16 @@ impl AccelerationStructureResources {
         self,
         device: &Device,
         acceleration_structure: &khr::acceleration_structure::Device,
-    ) { unsafe {
-        acceleration_structure.destroy_acceleration_structure(self.top_as, None);
-        self.top_as_buffer.destroy(device);
-        acceleration_structure.destroy_acceleration_structure(self.bottom_as, None);
-        self.bottom_as_buffer.destroy(device);
-        self.aabb_buffer.destroy(device);
-        self.instance_buffer.destroy(device);
-    }}
+    ) {
+        unsafe {
+            acceleration_structure.destroy_acceleration_structure(self.top_as, None);
+            self.top_as_buffer.destroy(device);
+            acceleration_structure.destroy_acceleration_structure(self.bottom_as, None);
+            self.bottom_as_buffer.destroy(device);
+            self.aabb_buffer.destroy(device);
+            self.instance_buffer.destroy(device);
+        }
+    }
 }
 
 /// 创建 Bottom-Level 加速结构（球体 AABB）
@@ -176,8 +178,8 @@ pub fn get_acceleration_structure_device_address(
     acceleration_structure: &khr::acceleration_structure::Device,
     as_handle: vk::AccelerationStructureKHR,
 ) -> u64 {
-    let as_addr_info = vk::AccelerationStructureDeviceAddressInfoKHR::default()
-        .acceleration_structure(as_handle);
+    let as_addr_info =
+        vk::AccelerationStructureDeviceAddressInfoKHR::default().acceleration_structure(as_handle);
     unsafe { acceleration_structure.get_acceleration_structure_device_address(&as_addr_info) }
 }
 
@@ -253,9 +255,7 @@ pub fn create_top_level_as(
     let instances = vk::AccelerationStructureGeometryInstancesDataKHR::default()
         .array_of_pointers(false)
         .data(vk::DeviceOrHostAddressConstKHR {
-            device_address: unsafe {
-                get_buffer_device_address(device, instance_buffer.buffer)
-            },
+            device_address: unsafe { get_buffer_device_address(device, instance_buffer.buffer) },
         });
 
     let geometry = vk::AccelerationStructureGeometryKHR::default()

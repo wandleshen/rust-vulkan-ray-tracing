@@ -3,9 +3,9 @@
 //! 包含 Instance、Device、Command Pool 创建以及调试工具
 
 use ash::prelude::VkResult;
-use ash::{ext, khr, vk, Device, Entry, Instance};
+use ash::{Device, Entry, Instance, ext, khr, vk};
 use std::collections::HashSet;
-use std::ffi::{c_void, CStr, CString};
+use std::ffi::{CStr, CString, c_void};
 use std::os::raw::c_char;
 
 /// 验证层配置
@@ -36,12 +36,7 @@ impl ValidationLayerConfig {
         if !self.enabled {
             return Ok(true);
         }
-        unsafe {
-            check_validation_layer_support(
-                entry,
-                self.layers.iter().map(|c| c.as_c_str()),
-            )
-        }
+        unsafe { check_validation_layer_support(entry, self.layers.iter().map(|c| c.as_c_str())) }
     }
 }
 
@@ -57,40 +52,44 @@ pub unsafe extern "system" fn default_vulkan_debug_utils_callback(
     message_type: vk::DebugUtilsMessageTypeFlagsEXT,
     p_callback_data: *const vk::DebugUtilsMessengerCallbackDataEXT,
     _p_user_data: *mut c_void,
-) -> vk::Bool32 { unsafe {
-    let severity = match message_severity {
-        vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => "[Verbose]",
-        vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => "[Warning]",
-        vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => "[Error]",
-        vk::DebugUtilsMessageSeverityFlagsEXT::INFO => "[Info]",
-        _ => "[Unknown]",
-    };
-    let types = match message_type {
-        vk::DebugUtilsMessageTypeFlagsEXT::GENERAL => "[General]",
-        vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE => "[Performance]",
-        vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION => "[Validation]",
-        _ => "[Unknown]",
-    };
-    let message = CStr::from_ptr((*p_callback_data).p_message);
-    println!("[Debug]{}{}{:?}", severity, types, message);
+) -> vk::Bool32 {
+    unsafe {
+        let severity = match message_severity {
+            vk::DebugUtilsMessageSeverityFlagsEXT::VERBOSE => "[Verbose]",
+            vk::DebugUtilsMessageSeverityFlagsEXT::WARNING => "[Warning]",
+            vk::DebugUtilsMessageSeverityFlagsEXT::ERROR => "[Error]",
+            vk::DebugUtilsMessageSeverityFlagsEXT::INFO => "[Info]",
+            _ => "[Unknown]",
+        };
+        let types = match message_type {
+            vk::DebugUtilsMessageTypeFlagsEXT::GENERAL => "[General]",
+            vk::DebugUtilsMessageTypeFlagsEXT::PERFORMANCE => "[Performance]",
+            vk::DebugUtilsMessageTypeFlagsEXT::VALIDATION => "[Validation]",
+            _ => "[Unknown]",
+        };
+        let message = CStr::from_ptr((*p_callback_data).p_message);
+        println!("[Debug]{}{}{:?}", severity, types, message);
 
-    vk::FALSE
-}}
+        vk::FALSE
+    }
+}
 
 pub unsafe fn check_validation_layer_support<'a>(
     entry: &Entry,
     required_validation_layers: impl IntoIterator<Item = &'a CStr>,
-) -> VkResult<bool> { unsafe {
-    let supported_layers: HashSet<CString> = entry
-        .enumerate_instance_layer_properties()?
-        .into_iter()
-        .map(|layer_property| CStr::from_ptr(layer_property.layer_name.as_ptr()).to_owned())
-        .collect();
+) -> VkResult<bool> {
+    unsafe {
+        let supported_layers: HashSet<CString> = entry
+            .enumerate_instance_layer_properties()?
+            .into_iter()
+            .map(|layer_property| CStr::from_ptr(layer_property.layer_name.as_ptr()).to_owned())
+            .collect();
 
-    Ok(required_validation_layers
-        .into_iter()
-        .all(|l| supported_layers.contains(l)))
-}}
+        Ok(required_validation_layers
+            .into_iter()
+            .all(|l| supported_layers.contains(l)))
+    }
+}
 
 /// 队列族索引
 #[derive(Default, Clone, Copy, Debug)]
@@ -196,12 +195,10 @@ pub fn pick_physical_device_and_queue_family_indices(
                 if let Some(present_index) = queue_families
                     .iter()
                     .enumerate()
-                    .find(|(i, _)| {
-                        unsafe {
-                            loader
-                                .get_physical_device_surface_support(physical_device, *i as u32, surf)
-                                .unwrap_or(false)
-                        }
+                    .find(|(i, _)| unsafe {
+                        loader
+                            .get_physical_device_surface_support(physical_device, *i as u32, surf)
+                            .unwrap_or(false)
                     })
                     .map(|(i, _)| i as u32)
                 {
@@ -218,18 +215,20 @@ pub fn pick_physical_device_and_queue_family_indices(
         }))
 }
 
-pub unsafe fn create_shader_module(device: &Device, code: &[u8]) -> VkResult<vk::ShaderModule> { unsafe {
-    let shader_module_create_info = vk::ShaderModuleCreateInfo {
-        s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
-        p_next: std::ptr::null(),
-        flags: vk::ShaderModuleCreateFlags::empty(),
-        code_size: code.len(),
-        p_code: code.as_ptr() as *const u32,
-        ..Default::default()
-    };
+pub unsafe fn create_shader_module(device: &Device, code: &[u8]) -> VkResult<vk::ShaderModule> {
+    unsafe {
+        let shader_module_create_info = vk::ShaderModuleCreateInfo {
+            s_type: vk::StructureType::SHADER_MODULE_CREATE_INFO,
+            p_next: std::ptr::null(),
+            flags: vk::ShaderModuleCreateFlags::empty(),
+            code_size: code.len(),
+            p_code: code.as_ptr() as *const u32,
+            ..Default::default()
+        };
 
-    device.create_shader_module(&shader_module_create_info, None)
-}}
+        device.create_shader_module(&shader_module_create_info, None)
+    }
+}
 
 /// 创建 Vulkan Instance
 pub fn create_instance(
@@ -238,7 +237,8 @@ pub fn create_instance(
     instance_extensions: &[*const i8],
     enable_validation: bool,
 ) -> VkResult<Instance> {
-    let application_name = CString::new("Vulkan Ray Tracing").expect("Failed to create application name");
+    let application_name =
+        CString::new("Vulkan Ray Tracing").expect("Failed to create application name");
     let engine_name = CString::new("No Engine").expect("Failed to create engine name");
 
     let mut debug_utils_create_info = vk::DebugUtilsMessengerCreateInfoEXT::default()
@@ -300,8 +300,8 @@ pub fn create_device(
         .buffer_device_address(true)
         .scalar_block_layout(true);
 
-    let mut as_feature = vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default()
-        .acceleration_structure(true);
+    let mut as_feature =
+        vk::PhysicalDeviceAccelerationStructureFeaturesKHR::default().acceleration_structure(true);
 
     let mut raytracing_pipeline =
         vk::PhysicalDeviceRayTracingPipelineFeaturesKHR::default().ray_tracing_pipeline(true);

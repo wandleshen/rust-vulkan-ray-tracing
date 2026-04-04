@@ -2,7 +2,7 @@
 //!
 //! 包含渲染目标图像创建、布局转换和 PNG 导出功能
 
-use ash::{vk, Device};
+use ash::{Device, vk};
 use bytemuck;
 use std::fs::File;
 use std::io::Write;
@@ -69,15 +69,21 @@ impl RenderTargetImage {
 
         let view = unsafe { device.create_image_view(&image_view_create_info, None) }?;
 
-        Ok(Self { image, memory, view })
+        Ok(Self {
+            image,
+            memory,
+            view,
+        })
     }
 
     /// 销毁渲染目标图像资源
-    pub unsafe fn destroy(self, device: &Device) { unsafe {
-        device.destroy_image_view(self.view, None);
-        device.destroy_image(self.image, None);
-        device.free_memory(self.memory, None);
-    }}
+    pub unsafe fn destroy(self, device: &Device) {
+        unsafe {
+            device.destroy_image_view(self.view, None);
+            device.destroy_image(self.image, None);
+            device.free_memory(self.memory, None);
+        }
+    }
 }
 
 /// 转换图像布局到 GENERAL

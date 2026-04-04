@@ -51,8 +51,11 @@ impl Swapchain {
             .find(|&&m| m == vk::PresentModeKHR::MAILBOX)
             .unwrap_or(&vk::PresentModeKHR::FIFO);
 
-        let image_count = (surface_capabilities.min_image_count + 1)
-            .min(surface_capabilities.max_image_count.max(surface_capabilities.min_image_count + 1));
+        let image_count = (surface_capabilities.min_image_count + 1).min(
+            surface_capabilities
+                .max_image_count
+                .max(surface_capabilities.min_image_count + 1),
+        );
 
         let extent = if surface_capabilities.current_extent.width != u32::MAX {
             surface_capabilities.current_extent
@@ -190,8 +193,8 @@ pub fn create_blit_pipeline(
         .color_write_mask(vk::ColorComponentFlags::RGBA);
 
     let color_blend_attachments = [color_blend_attachment];
-    let color_blending = vk::PipelineColorBlendStateCreateInfo::default()
-        .attachments(&color_blend_attachments);
+    let color_blending =
+        vk::PipelineColorBlendStateCreateInfo::default().attachments(&color_blend_attachments);
 
     let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
     let dynamic_state =
@@ -353,7 +356,12 @@ impl WindowedResources {
         );
 
         let render_pass = create_render_pass(device, swapchain.format);
-        let framebuffers = create_framebuffers(device, render_pass, &swapchain.image_views, swapchain.extent);
+        let framebuffers = create_framebuffers(
+            device,
+            render_pass,
+            &swapchain.image_views,
+            swapchain.extent,
+        );
 
         // 创建 blit descriptor set layout
         let blit_descriptor_set_layout = {
@@ -364,7 +372,11 @@ impl WindowedResources {
                 .stage_flags(vk::ShaderStageFlags::FRAGMENT)];
 
             let layout_info = vk::DescriptorSetLayoutCreateInfo::default().bindings(&bindings);
-            unsafe { device.create_descriptor_set_layout(&layout_info, None).unwrap() }
+            unsafe {
+                device
+                    .create_descriptor_set_layout(&layout_info, None)
+                    .unwrap()
+            }
         };
 
         let (blit_pipeline, blit_pipeline_layout) =
@@ -429,20 +441,22 @@ impl WindowedResources {
     }
 
     /// 销毁窗口模式资源
-    pub unsafe fn destroy(self, device: &ash::Device) { unsafe {
-        device.destroy_semaphore(self.image_available_semaphore, None);
-        device.destroy_semaphore(self.render_finished_semaphore, None);
-        device.destroy_fence(self.in_flight_fence, None);
-        device.destroy_pipeline(self.blit_pipeline, None);
-        device.destroy_pipeline_layout(self.blit_pipeline_layout, None);
-        device.destroy_descriptor_pool(self.blit_descriptor_pool, None);
-        device.destroy_descriptor_set_layout(self.blit_descriptor_set_layout, None);
-        for fb in self.framebuffers {
-            device.destroy_framebuffer(fb, None);
+    pub unsafe fn destroy(self, device: &ash::Device) {
+        unsafe {
+            device.destroy_semaphore(self.image_available_semaphore, None);
+            device.destroy_semaphore(self.render_finished_semaphore, None);
+            device.destroy_fence(self.in_flight_fence, None);
+            device.destroy_pipeline(self.blit_pipeline, None);
+            device.destroy_pipeline_layout(self.blit_pipeline_layout, None);
+            device.destroy_descriptor_pool(self.blit_descriptor_pool, None);
+            device.destroy_descriptor_set_layout(self.blit_descriptor_set_layout, None);
+            for fb in self.framebuffers {
+                device.destroy_framebuffer(fb, None);
+            }
+            device.destroy_render_pass(self.render_pass, None);
+            self.swapchain.destroy(device);
         }
-        device.destroy_render_pass(self.render_pass, None);
-        self.swapchain.destroy(device);
-    }}
+    }
 }
 
 /// 渲染到 swapchain
@@ -504,7 +518,11 @@ pub fn render_to_swapchain(
 
         device.cmd_begin_render_pass(blit_cmd, &render_pass_info, vk::SubpassContents::INLINE);
 
-        device.cmd_bind_pipeline(blit_cmd, vk::PipelineBindPoint::GRAPHICS, resources.blit_pipeline);
+        device.cmd_bind_pipeline(
+            blit_cmd,
+            vk::PipelineBindPoint::GRAPHICS,
+            resources.blit_pipeline,
+        );
         device.cmd_bind_descriptor_sets(
             blit_cmd,
             vk::PipelineBindPoint::GRAPHICS,
@@ -568,7 +586,10 @@ pub fn render_to_swapchain(
         .image_indices(&image_indices);
 
     unsafe {
-        let _ = resources.swapchain.loader.queue_present(graphics_queue, &present_info);
+        let _ = resources
+            .swapchain
+            .loader
+            .queue_present(graphics_queue, &present_info);
         device.queue_wait_idle(graphics_queue)?;
         device.free_command_buffers(command_pool, &[blit_cmd]);
     }

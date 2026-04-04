@@ -1,35 +1,48 @@
-use glam::Vec3A;
+use glam::{Vec3A, Vec4, vec4};
 
-/// 材质类型枚举
 #[derive(Clone, Copy)]
 #[repr(C)]
-pub struct EnumMaterial {
-    pub t: u32,
-    pub data: glam::Vec4,
+pub struct Material {
+    pub base_color: Vec4,
+    pub emission: Vec4,
+    pub params: Vec4,
+    pub medium: Vec4,
 }
 
-impl EnumMaterial {
-    /// 创建漫反射材质
-    pub fn lambertian(albedo: Vec3A) -> Self {
+impl Material {
+    pub fn diffuse(base_color: Vec3A) -> Self {
         Self {
-            t: 0,
-            data: albedo.extend(0.0).into(),
+            base_color: base_color.extend(1.0).into(),
+            emission: Vec4::ZERO,
+            params: vec4(1.0, 0.0, 0.0, 1.5),
+            medium: Vec4::ZERO,
         }
     }
 
-    /// 创建金属材质
-    pub fn metal(albedo: Vec3A, fuzz: f32) -> Self {
+    pub fn metal(base_color: Vec3A, roughness: f32) -> Self {
         Self {
-            t: 1,
-            data: albedo.extend(fuzz).into(),
+            base_color: base_color.extend(1.0).into(),
+            emission: Vec4::ZERO,
+            params: vec4(roughness.clamp(0.02, 1.0), 1.0, 0.0, 1.5),
+            medium: Vec4::ZERO,
         }
     }
 
-    /// 创建电介质材质（玻璃）
-    pub fn dielectric(ir: f32) -> Self {
+    pub fn dielectric(ior: f32) -> Self {
         Self {
-            t: 2,
-            data: glam::vec4(ir, 0.0, 0.0, 0.0),
+            base_color: vec4(1.0, 1.0, 1.0, 1.0),
+            emission: Vec4::ZERO,
+            params: vec4(0.0, 0.0, 1.0, ior),
+            medium: Vec4::ZERO,
+        }
+    }
+
+    pub fn emissive(base_color: Vec3A, emission: Vec3A, intensity: f32) -> Self {
+        Self {
+            base_color: base_color.extend(1.0).into(),
+            emission: (emission * intensity).extend(1.0).into(),
+            params: vec4(1.0, 0.0, 0.0, 1.5),
+            medium: Vec4::ZERO,
         }
     }
 }
