@@ -5,6 +5,7 @@
 pub mod acceleration_structure;
 pub mod buffer;
 pub mod camera;
+pub mod environment;
 pub mod image_utils;
 pub mod light;
 pub mod material;
@@ -19,8 +20,16 @@ pub use buffer::{BufferResource, aligned_size, get_buffer_device_address, get_me
 // 相机模块导出
 pub use camera::{CameraState, FrameUniform};
 
+pub use environment::{
+    ENV_MAP_HEIGHT, ENV_MAP_WIDTH, EnvironmentMapData, generate_environment_map,
+};
+
 // 灯光模块导出
-pub use light::{DemoLightState, LightMode, LightUniform, default_demo_light, key_to_light_mode};
+pub use light::{
+    DemoLightState, GpuLight, LightMode, LightUniform, MAX_LIGHTS, area_light_emission,
+    area_light_position, area_light_radius, default_demo_light, key_to_light_mode,
+    point_light_emission, point_light_position, point_light_radius,
+};
 
 // 图像工具导出
 pub use image_utils::{
@@ -32,7 +41,7 @@ pub use image_utils::{
 pub use material::Material;
 
 // 场景导出
-pub use scene::{create_sphere_instance, sample_scene};
+pub use scene::{SceneData, create_sphere_instance, sample_scene};
 
 // Vulkan 基础设施导出
 pub use vulkan_base::{

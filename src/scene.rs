@@ -1,7 +1,19 @@
-use crate::material::Material;
+use crate::{
+    area_light_position, area_light_radius, material::Material, point_light_position,
+    point_light_radius,
+};
 use ash::vk;
 use glam::{Vec3A, vec3a};
 use rand::prelude::*;
+
+pub struct SceneData {
+    pub instances: Vec<vk::AccelerationStructureInstanceKHR>,
+    pub materials: Vec<Material>,
+    pub point_light_instance_index: usize,
+    pub area_light_instance_index: usize,
+    pub point_light_material_index: usize,
+    pub area_light_material_index: usize,
+}
 
 pub fn create_sphere_instance(
     pos: Vec3A,
@@ -17,7 +29,7 @@ pub fn create_sphere_instance(
         instance_custom_index_and_mask: vk::Packed24_8::new(0, 0xff),
         instance_shader_binding_table_record_offset_and_flags: vk::Packed24_8::new(
             0,
-            vk::GeometryInstanceFlagsKHR::FORCE_OPAQUE.as_raw() as u8,
+            vk::GeometryInstanceFlagsKHR::empty().as_raw() as u8,
         ),
         acceleration_structure_reference: vk::AccelerationStructureReferenceKHR {
             device_handle: sphere_accel_handle,
@@ -25,9 +37,7 @@ pub fn create_sphere_instance(
     }
 }
 
-pub fn sample_scene(
-    sphere_accel_handle: u64,
-) -> (Vec<vk::AccelerationStructureInstanceKHR>, Vec<Material>) {
+pub fn sample_scene(sphere_accel_handle: u64) -> SceneData {
     let mut rng = StdRng::from_os_rng();
     let mut world = Vec::new();
 
@@ -89,12 +99,34 @@ pub fn sample_scene(
 
     world.push((
         create_sphere_instance(vec3a(-4.0, 1.0, 0.0), 1.0, sphere_accel_handle),
-        Material::diffuse(vec3a(0.4, 0.2, 0.1)),
+        Material::diffuse(vec3a(0.4, 0.2, 0.1)).with_clearcoat(0.35),
     ));
 
     world.push((
         create_sphere_instance(vec3a(4.0, 1.0, 0.0), 1.0, sphere_accel_handle),
         Material::metal(vec3a(0.7, 0.6, 0.5), 0.02),
+    ));
+
+    let point_light_instance_index = world.len();
+    let point_light_material_index = world.len();
+    world.push((
+        create_sphere_instance(
+            point_light_position().into(),
+            point_light_radius(),
+            sphere_accel_handle,
+        ),
+        Material::dielectric(1.0),
+    ));
+
+    let area_light_instance_index = world.len();
+    let area_light_material_index = world.len();
+    world.push((
+        create_sphere_instance(
+            area_light_position().into(),
+            area_light_radius(),
+            sphere_accel_handle,
+        ),
+        Material::dielectric(1.0),
     ));
 
     // 分离实例和材质
@@ -108,5 +140,12 @@ pub fn sample_scene(
         materials.push(material);
     }
 
-    (spheres, materials)
+    SceneData {
+        instances: spheres,
+        materials,
+        point_light_instance_index,
+        area_light_instance_index,
+        point_light_material_index,
+        area_light_material_index,
+    }
 }

@@ -6,17 +6,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_dir = std::env::var("OUT_DIR")?;
     let shader_dir = Path::new("shaders");
 
-    // 编译所有 shader 文件
     let shaders = vec![
-        ("raygen.rgen.shader", shaderc::ShaderKind::RayGeneration),
-        ("miss.rmiss.shader", shaderc::ShaderKind::Miss),
-        ("closesthit.rchit.shader", shaderc::ShaderKind::ClosestHit),
-        (
-            "intersection.rint.shader",
-            shaderc::ShaderKind::Intersection,
-        ),
-        ("blit.vert.shader", shaderc::ShaderKind::Vertex),
-        ("blit.frag.shader", shaderc::ShaderKind::Fragment),
+        ("raygen.rgen.glsl", shaderc::ShaderKind::RayGeneration),
+        ("miss.rmiss.glsl", shaderc::ShaderKind::Miss),
+        ("closesthit.rchit.glsl", shaderc::ShaderKind::ClosestHit),
+        ("anyhit.rahit.glsl", shaderc::ShaderKind::AnyHit),
+        ("intersection.rint.glsl", shaderc::ShaderKind::Intersection),
+        ("blit.vert.glsl", shaderc::ShaderKind::Vertex),
+        ("blit.frag.glsl", shaderc::ShaderKind::Fragment),
     ];
 
     let compiler = shaderc::Compiler::new().unwrap();
@@ -34,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         let artifact =
             compiler.compile_into_spirv(&source, kind, shader_file, "main", Some(&options))?;
 
-        let output_name = shader_file.strip_suffix(".shader").unwrap_or(shader_file);
+        let output_name = shader_file.strip_suffix(".glsl").unwrap_or(shader_file);
         let output_file = format!("{}/{}.spv", out_dir, output_name);
         fs::write(&output_file, artifact.as_binary_u8())?;
 

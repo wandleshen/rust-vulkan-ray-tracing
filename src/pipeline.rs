@@ -65,6 +65,26 @@ pub fn create_descriptor_set_layout(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
             .binding(4),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(5),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(6),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(7),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(8),
     ];
 
     unsafe {
@@ -90,11 +110,13 @@ pub fn create_ray_tracing_pipeline(
     const RAYGEN: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/raygen.rgen.spv"));
     const MISS: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/miss.rmiss.spv"));
     const CLOSESTHIT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/closesthit.rchit.spv"));
+    const ANYHIT: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/anyhit.rahit.spv"));
     const INTERSECTION: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/intersection.rint.spv"));
 
     let raygen_module = unsafe { create_shader_module(device, RAYGEN)? };
     let miss_module = unsafe { create_shader_module(device, MISS)? };
     let closesthit_module = unsafe { create_shader_module(device, CLOSESTHIT)? };
+    let anyhit_module = unsafe { create_shader_module(device, ANYHIT)? };
     let intersection_module = unsafe { create_shader_module(device, INTERSECTION)? };
 
     let layouts = [descriptor_set_layout];
@@ -122,12 +144,12 @@ pub fn create_ray_tracing_pipeline(
             .closest_hit_shader(vk::SHADER_UNUSED_KHR)
             .any_hit_shader(vk::SHADER_UNUSED_KHR)
             .intersection_shader(vk::SHADER_UNUSED_KHR),
-        // group2 = [ chit + intersection ]
+        // group2 = [ intersection + anyhit + chit ]
         vk::RayTracingShaderGroupCreateInfoKHR::default()
             .ty(vk::RayTracingShaderGroupTypeKHR::PROCEDURAL_HIT_GROUP)
             .general_shader(vk::SHADER_UNUSED_KHR)
-            .closest_hit_shader(3)
-            .any_hit_shader(vk::SHADER_UNUSED_KHR)
+            .closest_hit_shader(4)
+            .any_hit_shader(3)
             .intersection_shader(2),
     ];
 
@@ -145,6 +167,10 @@ pub fn create_ray_tracing_pipeline(
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::INTERSECTION_KHR)
             .module(intersection_module)
+            .name(entry_point),
+        vk::PipelineShaderStageCreateInfo::default()
+            .stage(vk::ShaderStageFlags::ANY_HIT_KHR)
+            .module(anyhit_module)
             .name(entry_point),
         vk::PipelineShaderStageCreateInfo::default()
             .stage(vk::ShaderStageFlags::CLOSEST_HIT_KHR)
@@ -172,6 +198,7 @@ pub fn create_ray_tracing_pipeline(
         device.destroy_shader_module(raygen_module, None);
         device.destroy_shader_module(miss_module, None);
         device.destroy_shader_module(closesthit_module, None);
+        device.destroy_shader_module(anyhit_module, None);
         device.destroy_shader_module(intersection_module, None);
     }
 
@@ -194,7 +221,7 @@ pub fn create_descriptor_pool_and_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 3,
+            descriptor_count: 7,
         },
     ];
 
@@ -230,6 +257,10 @@ pub fn update_descriptor_set(
     material_buffer: vk::Buffer,
     frame_uniform_buffer: vk::Buffer,
     light_uniform_buffer: vk::Buffer,
+    environment_texel_buffer: vk::Buffer,
+    environment_pmf_buffer: vk::Buffer,
+    environment_conditional_cdf_buffer: vk::Buffer,
+    environment_marginal_cdf_buffer: vk::Buffer,
 ) {
     let accel_structs = [top_as];
     let mut accel_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
@@ -287,6 +318,50 @@ pub fn update_descriptor_set(
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&light_buffer_info);
 
+    let environment_texel_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(environment_texel_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let environment_texel_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(5)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&environment_texel_buffer_info);
+
+    let environment_pmf_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(environment_pmf_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let environment_pmf_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(6)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&environment_pmf_buffer_info);
+
+    let environment_conditional_cdf_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(environment_conditional_cdf_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let environment_conditional_cdf_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(7)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&environment_conditional_cdf_buffer_info);
+
+    let environment_marginal_cdf_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(environment_marginal_cdf_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let environment_marginal_cdf_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(8)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&environment_marginal_cdf_buffer_info);
+
     unsafe {
         device.update_descriptor_sets(
             &[
@@ -295,6 +370,10 @@ pub fn update_descriptor_set(
                 buffers_write,
                 frame_write,
                 light_write,
+                environment_texel_write,
+                environment_pmf_write,
+                environment_conditional_cdf_write,
+                environment_marginal_cdf_write,
             ],
             &[],
         );

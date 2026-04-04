@@ -1,5 +1,4 @@
-//! Vulkan Ray Tracing 主程序
-
+//! Vulkan Ray Tracing 娑撹崵鈻兼惔?
 use vulkan_raytracing::*;
 
 use std::{
@@ -8,7 +7,7 @@ use std::{
 };
 
 use ash::{khr, vk};
-use glam::{Vec3, vec3};
+use glam::{Vec3, vec3, vec3a};
 use glfw::{Action, CursorMode, Key};
 use rand::prelude::*;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
@@ -32,19 +31,65 @@ fn is_key_down(window: &glfw::PWindow, key: Key) -> bool {
     matches!(window.get_key(key), Action::Press | Action::Repeat)
 }
 
-fn update_light_from_input(window: &glfw::PWindow, light_state: &mut DemoLightState) -> bool {
-    for key in [Key::Num1, Key::Num2, Key::Num3, Key::Num4] {
-        if is_key_down(window, key) {
-            if let Some(mode) = key_to_light_mode(key) {
-                if light_state.mode != mode {
-                    light_state.mode = mode;
-                    return true;
-                }
-            }
+fn update_light_from_input(
+    window: &glfw::PWindow,
+    light_state: &mut DemoLightState,
+    key_latches: &mut [bool; 4],
+) -> bool {
+    let key_modes = [
+        (Key::Num1, LightMode::Sky),
+        (Key::Num2, LightMode::Point),
+        (Key::Num3, LightMode::Directional),
+        (Key::Num4, LightMode::AreaSphere),
+    ];
+
+    let mut changed = false;
+    for (index, (key, mode)) in key_modes.into_iter().enumerate() {
+        let is_down = is_key_down(window, key);
+        if is_down && !key_latches[index] {
+            changed |= light_state.toggle(mode);
         }
+        key_latches[index] = is_down;
     }
 
-    false
+    changed
+}
+
+fn update_demo_light_materials(
+    materials: &mut [Material],
+    point_light_material_index: usize,
+    area_light_material_index: usize,
+    light_state: DemoLightState,
+) {
+    materials[point_light_material_index] = Material::invisible();
+
+    materials[area_light_material_index] = if light_state.area_enabled {
+        Material::emissive(vec3a(1.0, 0.98, 0.95), area_light_emission().into(), 1.0)
+    } else {
+        Material::invisible()
+    };
+}
+
+fn set_instance_mask(instance: &mut vk::AccelerationStructureInstanceKHR, mask: u8) -> bool {
+    if instance.instance_custom_index_and_mask.high_8() == mask {
+        return false;
+    }
+
+    instance.instance_custom_index_and_mask =
+        vk::Packed24_8::new(instance.instance_custom_index_and_mask.low_24(), mask);
+    true
+}
+
+fn sync_light_instance_visibility(scene: &mut SceneData, light_state: DemoLightState) -> bool {
+    let mut changed = false;
+    changed |= set_instance_mask(&mut scene.instances[scene.point_light_instance_index], 0x00);
+
+    let area_mask = if light_state.area_enabled { 0xff } else { 0x00 };
+    changed |= set_instance_mask(
+        &mut scene.instances[scene.area_light_instance_index],
+        area_mask,
+    );
+    changed
 }
 
 fn update_camera_from_input(
@@ -207,27 +252,49 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let sphere_accel_handle =
         get_acceleration_structure_device_address(&acceleration_structure, bottom_as);
 
-    let (sphere_instances, materials) = sample_scene(sphere_accel_handle);
-    let instance_buffer =
-        create_instance_buffer(&device, &sphere_instances, device_memory_properties);
+    let mut scene = sample_scene(sphere_accel_handle);
+    let mut demo_light = default_demo_light();
+    sync_light_instance_visibility(&mut scene, demo_light);
 
-    let (top_as, top_as_buffer) = create_top_level_as(
+    let mut instance_buffer =
+        create_instance_buffer(&device, &scene.instances, device_memory_properties);
+
+    let (mut top_as, mut top_as_buffer) = create_top_level_as(
         &device,
         &acceleration_structure,
         command_pool,
         graphics_queue,
         device_memory_properties,
         &instance_buffer,
-        sphere_instances.len() as u32,
+        scene.instances.len() as u32,
     )?;
-
-    let material_buffer = create_material_buffer(&device, &materials, device_memory_properties);
+    let mut materials = scene.materials.clone();
+    update_demo_light_materials(
+        &mut materials,
+        scene.point_light_material_index,
+        scene.area_light_material_index,
+        demo_light,
+    );
+    let mut material_buffer = create_material_buffer(&device, &materials, device_memory_properties);
+    let environment_map = generate_environment_map();
+    let environment_texel_buffer =
+        create_material_buffer(&device, &environment_map.texels, device_memory_properties);
+    let environment_pmf_buffer =
+        create_material_buffer(&device, &environment_map.pmf, device_memory_properties);
+    let environment_conditional_cdf_buffer = create_material_buffer(
+        &device,
+        &environment_map.conditional_cdf,
+        device_memory_properties,
+    );
+    let environment_marginal_cdf_buffer = create_material_buffer(
+        &device,
+        &environment_map.marginal_cdf,
+        device_memory_properties,
+    );
 
     let mut camera =
         CameraState::from_look_at(vec3(13.0, 2.0, 3.0), vec3(0.0, 0.0, 0.0), 20.0, 0.1);
     camera.focus_distance = 10.0;
-    let mut demo_light = default_demo_light();
-
     let mut frame_uniform_buffer = BufferResource::new(
         std::mem::size_of::<FrameUniform>() as u64,
         vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -247,7 +314,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &device,
         device_memory_properties,
     );
-    light_uniform_buffer.store(&[demo_light.build_uniform()], &device);
+    light_uniform_buffer.store(
+        &[demo_light.build_uniform(environment_map.average_luminance)],
+        &device,
+    );
 
     let descriptor_set_layout = create_descriptor_set_layout(&device)?;
     let (pipeline, pipeline_layout, shader_groups_len) =
@@ -263,6 +333,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         material_buffer.buffer,
         frame_uniform_buffer.buffer,
         light_uniform_buffer.buffer,
+        environment_texel_buffer.buffer,
+        environment_pmf_buffer.buffer,
+        environment_conditional_cdf_buffer.buffer,
+        environment_marginal_cdf_buffer.buffer,
     );
 
     let (
@@ -331,11 +405,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut reset_accumulation = true;
     let mut last_frame_time = Instant::now();
     let mut last_cursor_pos: Option<(f64, f64)> = None;
+    let mut light_key_latches = [false; 4];
 
     eprintln!(
-        "Controls: WASD move, Space/Ctrl up-down, mouse look, 1/2/3/4 switch lights, Esc quit"
+        "Controls: WASD move, Space/Ctrl up-down, mouse look, 1/2/3/4 toggle lights, Esc quit"
     );
-    eprintln!("Active light: {}", demo_light.mode.label());
+    eprintln!("Light state: {}", demo_light.summary());
 
     loop {
         if should_close || (HEADLESS_MODE && sampled >= N_SAMPLES) {
@@ -376,10 +451,60 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 reset_accumulation = true;
             }
 
-            if update_light_from_input(win, &mut demo_light) {
+            if update_light_from_input(win, &mut demo_light, &mut light_key_latches) {
+                let visibility_changed = sync_light_instance_visibility(&mut scene, demo_light);
+
+                if visibility_changed {
+                    unsafe {
+                        device.device_wait_idle()?;
+                    }
+                    instance_buffer.store(&scene.instances, &device);
+
+                    let (new_top_as, new_top_as_buffer) = create_top_level_as(
+                        &device,
+                        &acceleration_structure,
+                        command_pool,
+                        graphics_queue,
+                        device_memory_properties,
+                        &instance_buffer,
+                        scene.instances.len() as u32,
+                    )?;
+
+                    let old_top_as = top_as;
+                    let old_top_as_buffer =
+                        std::mem::replace(&mut top_as_buffer, new_top_as_buffer);
+                    top_as = new_top_as;
+
+                    update_descriptor_set(
+                        &device,
+                        descriptor_set,
+                        top_as,
+                        render_target.view,
+                        material_buffer.buffer,
+                        frame_uniform_buffer.buffer,
+                        light_uniform_buffer.buffer,
+                        environment_texel_buffer.buffer,
+                        environment_pmf_buffer.buffer,
+                        environment_conditional_cdf_buffer.buffer,
+                        environment_marginal_cdf_buffer.buffer,
+                    );
+
+                    unsafe {
+                        acceleration_structure.destroy_acceleration_structure(old_top_as, None);
+                        old_top_as_buffer.destroy(&device);
+                    }
+                }
+
+                update_demo_light_materials(
+                    &mut materials,
+                    scene.point_light_material_index,
+                    scene.area_light_material_index,
+                    demo_light,
+                );
+                material_buffer.store(&materials, &device);
                 sampled = 0;
                 reset_accumulation = true;
-                eprintln!("\nActive light: {}", demo_light.mode.label());
+                eprintln!("\nLight state: {}", demo_light.summary());
             }
         }
 
@@ -387,7 +512,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &[camera.build_uniform(WIDTH as f32 / HEIGHT as f32)],
             &device,
         );
-        light_uniform_buffer.store(&[demo_light.build_uniform()], &device);
+        light_uniform_buffer.store(
+            &[demo_light.build_uniform(environment_map.average_luminance)],
+            &device,
+        );
 
         let samples = if HEADLESS_MODE {
             std::cmp::min(N_SAMPLES - sampled, N_SAMPLES_ITER)
@@ -558,6 +686,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         material_buffer.destroy(&device);
         frame_uniform_buffer.destroy(&device);
         light_uniform_buffer.destroy(&device);
+        environment_texel_buffer.destroy(&device);
+        environment_pmf_buffer.destroy(&device);
+        environment_conditional_cdf_buffer.destroy(&device);
+        environment_marginal_cdf_buffer.destroy(&device);
         instance_buffer.destroy(&device);
 
         device.destroy_device(None);

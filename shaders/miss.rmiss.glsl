@@ -3,6 +3,7 @@
 
 layout(location = 0) rayPayloadInEXT RayPayload {
     uint isMiss;
+    float distance;
     vec3 position;
     vec3 normal;
     uint material;
@@ -11,4 +12,5 @@ layout(location = 0) rayPayloadInEXT RayPayload {
 
 void main() {
     payload.isMiss = 1;
+    payload.distance = 0.0;
 }
