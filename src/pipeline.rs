@@ -85,6 +85,36 @@ pub fn create_descriptor_set_layout(
             .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
             .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
             .binding(8),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(9),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(10),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(11),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(12),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(13),
+        vk::DescriptorSetLayoutBinding::default()
+            .descriptor_count(1)
+            .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+            .stage_flags(vk::ShaderStageFlags::RAYGEN_KHR)
+            .binding(14),
     ];
 
     unsafe {
@@ -217,11 +247,11 @@ pub fn create_descriptor_pool_and_set(
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_IMAGE,
-            descriptor_count: 1,
+            descriptor_count: 6,
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::STORAGE_BUFFER,
-            descriptor_count: 7,
+            descriptor_count: 8,
         },
     ];
 
@@ -256,11 +286,17 @@ pub fn update_descriptor_set(
     image_view: vk::ImageView,
     material_buffer: vk::Buffer,
     frame_uniform_buffer: vk::Buffer,
+    previous_frame_uniform_buffer: vk::Buffer,
     light_uniform_buffer: vk::Buffer,
     environment_texel_buffer: vk::Buffer,
     environment_pmf_buffer: vk::Buffer,
     environment_conditional_cdf_buffer: vk::Buffer,
     environment_marginal_cdf_buffer: vk::Buffer,
+    previous_color_image_view: vk::ImageView,
+    previous_position_image_view: vk::ImageView,
+    previous_normal_roughness_image_view: vk::ImageView,
+    current_position_image_view: vk::ImageView,
+    current_normal_roughness_image_view: vk::ImageView,
 ) {
     let accel_structs = [top_as];
     let mut accel_info = vk::WriteDescriptorSetAccelerationStructureKHR::default()
@@ -306,6 +342,17 @@ pub fn update_descriptor_set(
         .dst_array_element(0)
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&frame_buffer_info);
+
+    let previous_frame_buffer_info = [vk::DescriptorBufferInfo::default()
+        .buffer(previous_frame_uniform_buffer)
+        .range(vk::WHOLE_SIZE)];
+
+    let previous_frame_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(9)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
+        .buffer_info(&previous_frame_buffer_info);
 
     let light_buffer_info = [vk::DescriptorBufferInfo::default()
         .buffer(light_uniform_buffer)
@@ -362,6 +409,56 @@ pub fn update_descriptor_set(
         .descriptor_type(vk::DescriptorType::STORAGE_BUFFER)
         .buffer_info(&environment_marginal_cdf_buffer_info);
 
+    let previous_color_image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(previous_color_image_view)];
+    let previous_color_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(10)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .image_info(&previous_color_image_info);
+
+    let previous_position_image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(previous_position_image_view)];
+    let previous_position_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(11)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .image_info(&previous_position_image_info);
+
+    let previous_normal_roughness_image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(previous_normal_roughness_image_view)];
+    let previous_normal_roughness_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(12)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .image_info(&previous_normal_roughness_image_info);
+
+    let current_position_image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(current_position_image_view)];
+    let current_position_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(13)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .image_info(&current_position_image_info);
+
+    let current_normal_roughness_image_info = [vk::DescriptorImageInfo::default()
+        .image_layout(vk::ImageLayout::GENERAL)
+        .image_view(current_normal_roughness_image_view)];
+    let current_normal_roughness_write = vk::WriteDescriptorSet::default()
+        .dst_set(descriptor_set)
+        .dst_binding(14)
+        .dst_array_element(0)
+        .descriptor_type(vk::DescriptorType::STORAGE_IMAGE)
+        .image_info(&current_normal_roughness_image_info);
+
     unsafe {
         device.update_descriptor_sets(
             &[
@@ -369,11 +466,17 @@ pub fn update_descriptor_set(
                 image_write,
                 buffers_write,
                 frame_write,
+                previous_frame_write,
                 light_write,
                 environment_texel_write,
                 environment_pmf_write,
                 environment_conditional_cdf_write,
                 environment_marginal_cdf_write,
+                previous_color_write,
+                previous_position_write,
+                previous_normal_roughness_write,
+                current_position_write,
+                current_normal_roughness_write,
             ],
             &[],
         );

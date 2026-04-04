@@ -9,7 +9,6 @@ use std::{
 use ash::{khr, vk};
 use glam::{Vec3, vec3, vec3a};
 use glfw::{Action, CursorMode, Key};
-use rand::prelude::*;
 use raw_window_handle::{HasDisplayHandle, HasWindowHandle};
 
 const HEADLESS_MODE: bool = false;
@@ -22,6 +21,7 @@ const COLOR_FORMAT: vk::Format = vk::Format::R32G32B32A32_SFLOAT;
 const N_SAMPLES: u32 = 5000;
 const N_SAMPLES_ITER: u32 = 100;
 const WINDOW_SAMPLES_PER_FRAME: u32 = 1;
+const DENOISE_ATROUS_PASSES: u32 = 1;
 
 const CAMERA_MOVE_SPEED: f32 = 4.0;
 const CAMERA_BOOST_MULTIPLIER: f32 = 3.0;
@@ -241,6 +241,125 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     )?;
     transition_image_to_general(&device, command_pool, graphics_queue, render_target.image)?;
 
+    let current_noisy_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let previous_color_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let previous_position_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let previous_normal_roughness_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let previous_moments_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let current_position_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let current_normal_roughness_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let current_moments_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+    let denoise_ping_image = RenderTargetImage::new(
+        &device,
+        WIDTH,
+        HEIGHT,
+        COLOR_FORMAT,
+        device_memory_properties,
+    )?;
+
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        current_noisy_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        previous_color_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        previous_position_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        previous_normal_roughness_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        previous_moments_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        current_position_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        current_normal_roughness_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        current_moments_image.image,
+    )?;
+    transition_image_to_general(
+        &device,
+        command_pool,
+        graphics_queue,
+        denoise_ping_image.image,
+    )?;
+
     let (bottom_as, bottom_as_buffer, aabb_buffer) = create_bottom_level_as(
         &device,
         &acceleration_structure,
@@ -295,6 +414,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut camera =
         CameraState::from_look_at(vec3(13.0, 2.0, 3.0), vec3(0.0, 0.0, 0.0), 20.0, 0.1);
     camera.focus_distance = 10.0;
+    let temporal_enabled = !HEADLESS_MODE;
     let mut frame_uniform_buffer = BufferResource::new(
         std::mem::size_of::<FrameUniform>() as u64,
         vk::BufferUsageFlags::STORAGE_BUFFER,
@@ -302,10 +422,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &device,
         device_memory_properties,
     );
-    frame_uniform_buffer.store(
-        &[camera.build_uniform(WIDTH as f32 / HEIGHT as f32)],
+    let mut previous_frame_uniform = camera.build_uniform(WIDTH as f32 / HEIGHT as f32);
+    previous_frame_uniform.origin[3] = 0.0;
+    let mut bootstrap_frame_uniform = camera.build_uniform(WIDTH as f32 / HEIGHT as f32);
+    bootstrap_frame_uniform.origin[3] = if temporal_enabled { 1.0 } else { 0.0 };
+    frame_uniform_buffer.store(&[bootstrap_frame_uniform], &device);
+
+    let mut previous_frame_uniform_buffer = BufferResource::new(
+        std::mem::size_of::<FrameUniform>() as u64,
+        vk::BufferUsageFlags::STORAGE_BUFFER,
+        vk::MemoryPropertyFlags::HOST_VISIBLE | vk::MemoryPropertyFlags::HOST_COHERENT,
         &device,
+        device_memory_properties,
     );
+    previous_frame_uniform_buffer.store(&[previous_frame_uniform], &device);
 
     let mut light_uniform_buffer = BufferResource::new(
         std::mem::size_of::<LightUniform>() as u64,
@@ -319,6 +449,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &device,
     );
 
+    let raygen_output_view = if temporal_enabled {
+        current_noisy_image.view
+    } else {
+        render_target.view
+    };
+
     let descriptor_set_layout = create_descriptor_set_layout(&device)?;
     let (pipeline, pipeline_layout, shader_groups_len) =
         create_ray_tracing_pipeline(&device, &rt_pipeline, descriptor_set_layout)?;
@@ -329,14 +465,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         &device,
         descriptor_set,
         top_as,
-        render_target.view,
+        raygen_output_view,
         material_buffer.buffer,
         frame_uniform_buffer.buffer,
+        previous_frame_uniform_buffer.buffer,
         light_uniform_buffer.buffer,
         environment_texel_buffer.buffer,
         environment_pmf_buffer.buffer,
         environment_conditional_cdf_buffer.buffer,
         environment_marginal_cdf_buffer.buffer,
+        previous_color_image.view,
+        previous_position_image.view,
+        previous_normal_roughness_image.view,
+        current_position_image.view,
+        current_normal_roughness_image.view,
     );
 
     let (
@@ -353,6 +495,28 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         shader_groups_len,
         device_memory_properties,
     )?;
+
+    let denoise_descriptor_set_layout = create_denoise_descriptor_set_layout(&device)?;
+    let (denoise_pipeline, denoise_pipeline_layout) =
+        create_denoise_pipeline(&device, denoise_descriptor_set_layout)?;
+    let (denoise_descriptor_pool, denoise_descriptor_set) =
+        create_denoise_descriptor_pool_and_set(&device, denoise_descriptor_set_layout)?;
+    update_denoise_descriptor_set(
+        &device,
+        denoise_descriptor_set,
+        current_noisy_image.view,
+        previous_color_image.view,
+        previous_position_image.view,
+        previous_normal_roughness_image.view,
+        current_position_image.view,
+        current_normal_roughness_image.view,
+        previous_moments_image.view,
+        current_moments_image.view,
+        denoise_ping_image.view,
+        render_target.view,
+        frame_uniform_buffer.buffer,
+        previous_frame_uniform_buffer.buffer,
+    );
 
     let image_subresource_range = vk::ImageSubresourceRange::default()
         .aspect_mask(vk::ImageAspectFlags::COLOR)
@@ -383,6 +547,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         .subresource_range(image_subresource_range);
 
     let command_buffer = allocate_command_buffer(&device, command_pool)?;
+    let compute_group_count_x = WIDTH.div_ceil(8);
+    let compute_group_count_y = HEIGHT.div_ceil(8);
 
     let windowed_resources = if !HEADLESS_MODE {
         Some(WindowedResources::new(
@@ -399,7 +565,6 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         None
     };
 
-    let mut rng = StdRng::from_os_rng();
     let mut sampled = 0u32;
     let mut should_close = false;
     let mut reset_accumulation = true;
@@ -448,7 +613,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
             if update_camera_from_input(win, &mut camera, delta_time, mouse_delta) {
                 sampled = 0;
-                reset_accumulation = true;
+                if HEADLESS_MODE {
+                    reset_accumulation = true;
+                }
             }
 
             if update_light_from_input(win, &mut demo_light, &mut light_key_latches) {
@@ -479,14 +646,20 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                         &device,
                         descriptor_set,
                         top_as,
-                        render_target.view,
+                        raygen_output_view,
                         material_buffer.buffer,
                         frame_uniform_buffer.buffer,
+                        previous_frame_uniform_buffer.buffer,
                         light_uniform_buffer.buffer,
                         environment_texel_buffer.buffer,
                         environment_pmf_buffer.buffer,
                         environment_conditional_cdf_buffer.buffer,
                         environment_marginal_cdf_buffer.buffer,
+                        previous_color_image.view,
+                        previous_position_image.view,
+                        previous_normal_roughness_image.view,
+                        current_position_image.view,
+                        current_normal_roughness_image.view,
                     );
 
                     unsafe {
@@ -508,10 +681,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
 
-        frame_uniform_buffer.store(
-            &[camera.build_uniform(WIDTH as f32 / HEIGHT as f32)],
-            &device,
-        );
+        let mut current_frame_uniform = camera.build_uniform(WIDTH as f32 / HEIGHT as f32);
+        current_frame_uniform.origin[3] = if temporal_enabled { 1.0 } else { 0.0 };
+        if reset_accumulation {
+            previous_frame_uniform.origin[3] = 0.0;
+        }
+        previous_frame_uniform_buffer.store(&[previous_frame_uniform], &device);
+        frame_uniform_buffer.store(&[current_frame_uniform], &device);
         light_uniform_buffer.store(
             &[demo_light.build_uniform(environment_map.average_luminance)],
             &device,
@@ -530,7 +706,75 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     .flags(vk::CommandBufferUsageFlags::SIMULTANEOUS_USE),
             )?;
 
-            if reset_accumulation {
+            if temporal_enabled {
+                if reset_accumulation {
+                    for image in [
+                        previous_color_image.image,
+                        previous_position_image.image,
+                        previous_normal_roughness_image.image,
+                        previous_moments_image.image,
+                    ] {
+                        device.cmd_clear_color_image(
+                            command_buffer,
+                            image,
+                            vk::ImageLayout::GENERAL,
+                            &vk::ClearColorValue {
+                                float32: [0.0, 0.0, 0.0, 0.0],
+                            },
+                            &[image_subresource_range],
+                        );
+                    }
+
+                    let history_clear_barriers = [
+                        vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                            )
+                            .old_layout(vk::ImageLayout::GENERAL)
+                            .new_layout(vk::ImageLayout::GENERAL)
+                            .image(previous_color_image.image)
+                            .subresource_range(image_subresource_range),
+                        vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                            )
+                            .old_layout(vk::ImageLayout::GENERAL)
+                            .new_layout(vk::ImageLayout::GENERAL)
+                            .image(previous_position_image.image)
+                            .subresource_range(image_subresource_range),
+                        vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                            )
+                            .old_layout(vk::ImageLayout::GENERAL)
+                            .new_layout(vk::ImageLayout::GENERAL)
+                            .image(previous_normal_roughness_image.image)
+                            .subresource_range(image_subresource_range),
+                        vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                            )
+                            .old_layout(vk::ImageLayout::GENERAL)
+                            .new_layout(vk::ImageLayout::GENERAL)
+                            .image(previous_moments_image.image)
+                            .subresource_range(image_subresource_range),
+                    ];
+
+                    device.cmd_pipeline_barrier(
+                        command_buffer,
+                        vk::PipelineStageFlags::TRANSFER,
+                        vk::PipelineStageFlags::ALL_COMMANDS,
+                        vk::DependencyFlags::empty(),
+                        &[],
+                        &[],
+                        &history_clear_barriers,
+                    );
+                }
+            } else if reset_accumulation {
                 device.cmd_clear_color_image(
                     command_buffer,
                     render_target.image,
@@ -566,25 +810,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 &[],
             );
 
-            for sample_index in 0..samples {
-                if !reset_accumulation || sample_index > 0 {
-                    device.cmd_pipeline_barrier(
-                        command_buffer,
-                        vk::PipelineStageFlags::ALL_COMMANDS,
-                        vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
-                        vk::DependencyFlags::empty(),
-                        &[],
-                        &[],
-                        &[image_barrier],
-                    );
-                }
-
+            if temporal_enabled {
                 device.cmd_push_constants(
                     command_buffer,
                     pipeline_layout,
                     vk::ShaderStageFlags::RAYGEN_KHR,
                     0,
-                    &rng.next_u32().to_le_bytes(),
+                    &sampled.to_le_bytes(),
                 );
 
                 rt_pipeline.cmd_trace_rays(
@@ -597,14 +829,231 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                     HEIGHT,
                     1,
                 );
+
+                let rt_to_compute_barriers = [
+                    vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::GENERAL)
+                        .image(current_noisy_image.image)
+                        .subresource_range(image_subresource_range),
+                    vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::GENERAL)
+                        .image(current_position_image.image)
+                        .subresource_range(image_subresource_range),
+                    vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::GENERAL)
+                        .image(current_normal_roughness_image.image)
+                        .subresource_range(image_subresource_range),
+                ];
+
+                device.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &rt_to_compute_barriers,
+                );
+
+                device.cmd_bind_pipeline(
+                    command_buffer,
+                    vk::PipelineBindPoint::COMPUTE,
+                    denoise_pipeline,
+                );
+                device.cmd_bind_descriptor_sets(
+                    command_buffer,
+                    vk::PipelineBindPoint::COMPUTE,
+                    denoise_pipeline_layout,
+                    0,
+                    &[denoise_descriptor_set],
+                    &[],
+                );
+
+                let temporal_push_constants = DenoisePushConstants {
+                    mode: 0,
+                    step_width: 1,
+                    input_is_ping: 1,
+                    _padding: 0,
+                };
+                device.cmd_push_constants(
+                    command_buffer,
+                    denoise_pipeline_layout,
+                    vk::ShaderStageFlags::COMPUTE,
+                    0,
+                    push_constants_bytes(&temporal_push_constants),
+                );
+                device.cmd_dispatch(
+                    command_buffer,
+                    compute_group_count_x,
+                    compute_group_count_y,
+                    1,
+                );
+
+                let temporal_output_barriers = [
+                    vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(
+                            vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                        )
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::GENERAL)
+                        .image(denoise_ping_image.image)
+                        .subresource_range(image_subresource_range),
+                    vk::ImageMemoryBarrier::default()
+                        .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                        .dst_access_mask(vk::AccessFlags::SHADER_READ)
+                        .old_layout(vk::ImageLayout::GENERAL)
+                        .new_layout(vk::ImageLayout::GENERAL)
+                        .image(current_moments_image.image)
+                        .subresource_range(image_subresource_range),
+                ];
+                device.cmd_pipeline_barrier(
+                    command_buffer,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::PipelineStageFlags::COMPUTE_SHADER,
+                    vk::DependencyFlags::empty(),
+                    &[],
+                    &[],
+                    &temporal_output_barriers,
+                );
+
+                for iteration in 0..DENOISE_ATROUS_PASSES {
+                    let input_is_ping = if iteration % 2 == 0 { 1 } else { 0 };
+                    let atrous_push_constants = DenoisePushConstants {
+                        mode: 1,
+                        step_width: 1u32 << iteration,
+                        input_is_ping,
+                        _padding: 0,
+                    };
+                    device.cmd_push_constants(
+                        command_buffer,
+                        denoise_pipeline_layout,
+                        vk::ShaderStageFlags::COMPUTE,
+                        0,
+                        push_constants_bytes(&atrous_push_constants),
+                    );
+                    device.cmd_dispatch(
+                        command_buffer,
+                        compute_group_count_x,
+                        compute_group_count_y,
+                        1,
+                    );
+
+                    if iteration + 1 < DENOISE_ATROUS_PASSES {
+                        let intermediate_image = if input_is_ping == 1 {
+                            render_target.image
+                        } else {
+                            denoise_ping_image.image
+                        };
+                        let atrous_barrier = vk::ImageMemoryBarrier::default()
+                            .src_access_mask(vk::AccessFlags::SHADER_WRITE)
+                            .dst_access_mask(
+                                vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE,
+                            )
+                            .old_layout(vk::ImageLayout::GENERAL)
+                            .new_layout(vk::ImageLayout::GENERAL)
+                            .image(intermediate_image)
+                            .subresource_range(image_subresource_range);
+                        device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::COMPUTE_SHADER,
+                            vk::PipelineStageFlags::COMPUTE_SHADER,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            &[atrous_barrier],
+                        );
+                    }
+                }
+            } else {
+                for sample_index in 0..samples {
+                    if !reset_accumulation || sample_index > 0 {
+                        device.cmd_pipeline_barrier(
+                            command_buffer,
+                            vk::PipelineStageFlags::ALL_COMMANDS,
+                            vk::PipelineStageFlags::RAY_TRACING_SHADER_KHR,
+                            vk::DependencyFlags::empty(),
+                            &[],
+                            &[],
+                            &[image_barrier],
+                        );
+                    }
+
+                    device.cmd_push_constants(
+                        command_buffer,
+                        pipeline_layout,
+                        vk::ShaderStageFlags::RAYGEN_KHR,
+                        0,
+                        &(sampled + sample_index).to_le_bytes(),
+                    );
+
+                    rt_pipeline.cmd_trace_rays(
+                        command_buffer,
+                        &sbt_raygen_region,
+                        &sbt_miss_region,
+                        &sbt_hit_region,
+                        &sbt_call_region,
+                        WIDTH,
+                        HEIGHT,
+                        1,
+                    );
+                }
             }
 
             device.end_command_buffer(command_buffer)?;
         }
 
         submit_and_wait(&device, graphics_queue, command_buffer)?;
+        if temporal_enabled {
+            copy_image_to_image(
+                &device,
+                command_pool,
+                graphics_queue,
+                denoise_ping_image.image,
+                previous_color_image.image,
+                WIDTH,
+                HEIGHT,
+            )?;
+            copy_image_to_image(
+                &device,
+                command_pool,
+                graphics_queue,
+                current_position_image.image,
+                previous_position_image.image,
+                WIDTH,
+                HEIGHT,
+            )?;
+            copy_image_to_image(
+                &device,
+                command_pool,
+                graphics_queue,
+                current_normal_roughness_image.image,
+                previous_normal_roughness_image.image,
+                WIDTH,
+                HEIGHT,
+            )?;
+            copy_image_to_image(
+                &device,
+                command_pool,
+                graphics_queue,
+                current_moments_image.image,
+                previous_moments_image.image,
+                WIDTH,
+                HEIGHT,
+            )?;
+        }
         sampled += samples;
         reset_accumulation = false;
+        previous_frame_uniform = current_frame_uniform;
 
         if let Some(ref resources) = windowed_resources {
             render_to_swapchain(
@@ -612,7 +1061,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 command_pool,
                 graphics_queue,
                 resources,
-                sampled.max(1),
+                if temporal_enabled { 1 } else { sampled.max(1) },
             )?;
 
             if FRAME_DELAY_MS > 0 {
@@ -661,7 +1110,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         dst_image,
         WIDTH,
         HEIGHT,
-        sampled.max(1),
+        if temporal_enabled { 1 } else { sampled.max(1) },
         "out.png",
     );
 
@@ -675,6 +1124,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         device.destroy_pipeline(pipeline, None);
         device.destroy_descriptor_set_layout(descriptor_set_layout, None);
         device.destroy_pipeline_layout(pipeline_layout, None);
+        device.destroy_descriptor_pool(denoise_descriptor_pool, None);
+        device.destroy_pipeline(denoise_pipeline, None);
+        device.destroy_descriptor_set_layout(denoise_descriptor_set_layout, None);
+        device.destroy_pipeline_layout(denoise_pipeline_layout, None);
 
         acceleration_structure.destroy_acceleration_structure(top_as, None);
         top_as_buffer.destroy(&device);
@@ -683,8 +1136,18 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         aabb_buffer.destroy(&device);
 
         render_target.destroy(&device);
+        current_noisy_image.destroy(&device);
+        previous_color_image.destroy(&device);
+        previous_position_image.destroy(&device);
+        previous_normal_roughness_image.destroy(&device);
+        previous_moments_image.destroy(&device);
+        current_position_image.destroy(&device);
+        current_normal_roughness_image.destroy(&device);
+        current_moments_image.destroy(&device);
+        denoise_ping_image.destroy(&device);
         material_buffer.destroy(&device);
         frame_uniform_buffer.destroy(&device);
+        previous_frame_uniform_buffer.destroy(&device);
         light_uniform_buffer.destroy(&device);
         environment_texel_buffer.destroy(&device);
         environment_pmf_buffer.destroy(&device);

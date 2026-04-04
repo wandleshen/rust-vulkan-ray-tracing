@@ -14,6 +14,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         ("intersection.rint.glsl", shaderc::ShaderKind::Intersection),
         ("blit.vert.glsl", shaderc::ShaderKind::Vertex),
         ("blit.frag.glsl", shaderc::ShaderKind::Fragment),
+        ("denoise.comp.glsl", shaderc::ShaderKind::Compute),
     ];
 
     let compiler = shaderc::Compiler::new().unwrap();

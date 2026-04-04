@@ -192,6 +192,142 @@ pub fn create_host_visible_image(
 }
 
 /// 复制图像到主机可见内存
+pub fn copy_image_to_image(
+    device: &Device,
+    command_pool: vk::CommandPool,
+    graphics_queue: vk::Queue,
+    src_image: vk::Image,
+    dst_image: vk::Image,
+    width: u32,
+    height: u32,
+) -> Result<(), vk::Result> {
+    let copy_cmd = {
+        let allocate_info = vk::CommandBufferAllocateInfo::default()
+            .command_pool(command_pool)
+            .level(vk::CommandBufferLevel::PRIMARY)
+            .command_buffer_count(1);
+
+        unsafe { device.allocate_command_buffers(&allocate_info) }?[0]
+    };
+
+    let cmd_begin_info = vk::CommandBufferBeginInfo::default();
+    unsafe { device.begin_command_buffer(copy_cmd, &cmd_begin_info) }?;
+
+    let subresource_range = vk::ImageSubresourceRange::default()
+        .aspect_mask(vk::ImageAspectFlags::COLOR)
+        .base_mip_level(0)
+        .level_count(1)
+        .base_array_layer(0)
+        .layer_count(1);
+
+    let prepare_barriers = [
+        vk::ImageMemoryBarrier::default()
+            .src_access_mask(
+                vk::AccessFlags::SHADER_READ
+                    | vk::AccessFlags::SHADER_WRITE
+                    | vk::AccessFlags::MEMORY_READ
+                    | vk::AccessFlags::MEMORY_WRITE,
+            )
+            .dst_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .image(src_image)
+            .subresource_range(subresource_range),
+        vk::ImageMemoryBarrier::default()
+            .src_access_mask(
+                vk::AccessFlags::SHADER_READ
+                    | vk::AccessFlags::SHADER_WRITE
+                    | vk::AccessFlags::MEMORY_READ
+                    | vk::AccessFlags::MEMORY_WRITE,
+            )
+            .dst_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .old_layout(vk::ImageLayout::GENERAL)
+            .new_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .image(dst_image)
+            .subresource_range(subresource_range),
+    ];
+
+    unsafe {
+        device.cmd_pipeline_barrier(
+            copy_cmd,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &prepare_barriers,
+        );
+    }
+
+    let copy_region = vk::ImageCopy::default()
+        .src_subresource(
+            vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1),
+        )
+        .dst_subresource(
+            vk::ImageSubresourceLayers::default()
+                .aspect_mask(vk::ImageAspectFlags::COLOR)
+                .layer_count(1),
+        )
+        .extent(vk::Extent3D::default().width(width).height(height).depth(1));
+
+    unsafe {
+        device.cmd_copy_image(
+            copy_cmd,
+            src_image,
+            vk::ImageLayout::TRANSFER_SRC_OPTIMAL,
+            dst_image,
+            vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            &[copy_region],
+        );
+    }
+
+    let finish_barriers = [
+        vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_READ)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+            .old_layout(vk::ImageLayout::TRANSFER_SRC_OPTIMAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(src_image)
+            .subresource_range(subresource_range),
+        vk::ImageMemoryBarrier::default()
+            .src_access_mask(vk::AccessFlags::TRANSFER_WRITE)
+            .dst_access_mask(vk::AccessFlags::SHADER_READ | vk::AccessFlags::SHADER_WRITE)
+            .old_layout(vk::ImageLayout::TRANSFER_DST_OPTIMAL)
+            .new_layout(vk::ImageLayout::GENERAL)
+            .image(dst_image)
+            .subresource_range(subresource_range),
+    ];
+
+    unsafe {
+        device.cmd_pipeline_barrier(
+            copy_cmd,
+            vk::PipelineStageFlags::TRANSFER,
+            vk::PipelineStageFlags::ALL_COMMANDS,
+            vk::DependencyFlags::empty(),
+            &[],
+            &[],
+            &finish_barriers,
+        );
+
+        device.end_command_buffer(copy_cmd)?;
+
+        device
+            .queue_submit(
+                graphics_queue,
+                &[vk::SubmitInfo::default().command_buffers(&[copy_cmd])],
+                vk::Fence::null(),
+            )
+            .expect("Failed to execute queue submit.");
+
+        device.queue_wait_idle(graphics_queue)?;
+        device.free_command_buffers(command_pool, &[copy_cmd]);
+    }
+
+    Ok(())
+}
+
 pub fn copy_image_to_host(
     device: &Device,
     command_pool: vk::CommandPool,

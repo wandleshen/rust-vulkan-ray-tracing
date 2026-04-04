@@ -55,6 +55,19 @@ layout(binding = 3, set = 0) readonly buffer FrameDataBuffer {
     vec4 basisULensRadius;
     vec4 basisVPadding;
 } frameData;
+layout(binding = 9, set = 0) readonly buffer PreviousFrameDataBuffer {
+    vec4 origin;
+    vec4 lowerLeftCorner;
+    vec4 horizontal;
+    vec4 vertical;
+    vec4 basisULensRadius;
+    vec4 basisVPadding;
+} previousFrameData;
+layout(binding = 10, set = 0, rgba32f) uniform readonly image2D previousColorImage;
+layout(binding = 11, set = 0, rgba32f) uniform readonly image2D previousPositionImage;
+layout(binding = 12, set = 0, rgba32f) uniform readonly image2D previousNormalRoughnessImage;
+layout(binding = 13, set = 0, rgba32f) uniform image2D currentPositionImage;
+layout(binding = 14, set = 0, rgba32f) uniform image2D currentNormalRoughnessImage;
 layout(binding = 4, set = 0) readonly buffer LightDataBuffer {
     vec4 meta;
     GpuLight lights[];
@@ -109,6 +122,10 @@ struct LightSample {
     bool valid;
 };
 
+bool temporalDenoiseEnabled();
+bool temporalHistoryAvailable();
+float temporalMaxHistory(float roughness, float metallic, float transmission, float clearcoat);
+
 bool isDeltaBsdfSample(BsdfSample bsdfSampleValue) {
     return (bsdfSampleValue.flags & BSDF_EVENT_DELTA) != 0u;
 }
@@ -146,9 +163,66 @@ uint pcgHash(uint seed) {
     return (word >> 22u) ^ word;
 }
 
+float radicalInverseBase2(uint bits) {
+    bits = (bits << 16u) | (bits >> 16u);
+    bits = ((bits & 0x55555555u) << 1u) | ((bits & 0xaaaaaaaau) >> 1u);
+    bits = ((bits & 0x33333333u) << 2u) | ((bits & 0xccccccccu) >> 2u);
+    bits = ((bits & 0x0f0f0f0fu) << 4u) | ((bits & 0xf0f0f0f0u) >> 4u);
+    bits = ((bits & 0x00ff00ffu) << 8u) | ((bits & 0xff00ff00u) >> 8u);
+    return float(bits) * (1.0 / 4294967296.0);
+}
+
+float radicalInverse(uint index, uint base) {
+    float invBase = 1.0 / float(base);
+    float invBaseN = invBase;
+    float reversedDigits = 0.0;
+
+    while (index > 0u) {
+        uint next = index / base;
+        uint digit = index - next * base;
+        reversedDigits += float(digit) * invBaseN;
+        invBaseN *= invBase;
+        index = next;
+    }
+
+    return reversedDigits;
+}
+
+uint primeBase(uint dimension) {
+    switch (dimension & 15u) {
+        case 0u: return 2u;
+        case 1u: return 3u;
+        case 2u: return 5u;
+        case 3u: return 7u;
+        case 4u: return 11u;
+        case 5u: return 13u;
+        case 6u: return 17u;
+        case 7u: return 19u;
+        case 8u: return 23u;
+        case 9u: return 29u;
+        case 10u: return 31u;
+        case 11u: return 37u;
+        case 12u: return 41u;
+        case 13u: return 43u;
+        case 14u: return 47u;
+        default: return 53u;
+    }
+}
+
+float lowDiscrepancyFloat(uint sampleIndex, uint dimension, uint scramble) {
+    uint base = primeBase(dimension);
+    float value = base == 2u
+        ? radicalInverseBase2(sampleIndex + 1u)
+        : radicalInverse(sampleIndex + 1u, base);
+    return fract(value + float(scramble) * (1.0 / 4294967296.0));
+}
+
 float randomFloat(inout uint seed) {
-    seed = pcgHash(seed);
-    return float(seed) / float(0xffffffffu);
+    uint dimension = seed;
+    seed += 1u;
+    uint pixelIndex = gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x + gl_LaunchIDEXT.x;
+    uint scramble = pcgHash(pixelIndex ^ (dimension * 0x9e3779b9u));
+    return lowDiscrepancyFloat(constants.seed, dimension, scramble);
 }
 
 float randomFloatRange(inout uint seed, float minValue, float maxValue) {
@@ -181,7 +255,9 @@ Ray getRay(float s, float t, inout uint seed) {
     float lensRadius = frameData.basisULensRadius.w;
     vec3 basisU = frameData.basisULensRadius.xyz;
     vec3 basisV = frameData.basisVPadding.xyz;
-    vec3 lensSample = lensRadius * randomInUnitDisk(seed);
+    vec3 lensSample = temporalDenoiseEnabled()
+        ? vec3(0.0)
+        : lensRadius * randomInUnitDisk(seed);
     vec3 offset = basisU * lensSample.x + basisV * lensSample.y;
 
     Ray ray;
@@ -192,6 +268,104 @@ Ray getRay(float s, float t, inout uint seed) {
         - frameData.origin.xyz
         - offset;
     return ray;
+}
+
+vec3 frameCenter(
+    vec4 origin,
+    vec4 lowerLeftCorner,
+    vec4 horizontal,
+    vec4 vertical
+) {
+    return lowerLeftCorner.xyz + 0.5 * horizontal.xyz + 0.5 * vertical.xyz;
+}
+
+vec3 frameForward(
+    vec4 origin,
+    vec4 lowerLeftCorner,
+    vec4 horizontal,
+    vec4 vertical
+) {
+    return normalize(frameCenter(origin, lowerLeftCorner, horizontal, vertical) - origin.xyz);
+}
+
+bool projectWorldPositionToFrameUv(
+    vec3 worldPosition,
+    vec4 origin,
+    vec4 lowerLeftCorner,
+    vec4 horizontal,
+    vec4 vertical,
+    out vec2 uv
+) {
+    vec3 planeCenter = frameCenter(origin, lowerLeftCorner, horizontal, vertical);
+    vec3 forward = normalize(planeCenter - origin.xyz);
+    float focusDistance = length(planeCenter - origin.xyz);
+    vec3 relative = worldPosition - origin.xyz;
+    float depth = dot(relative, forward);
+    if (depth <= EPSILON) {
+        uv = vec2(-1.0);
+        return false;
+    }
+
+    vec3 projectedPoint = origin.xyz + relative * (focusDistance / depth);
+    vec3 fromLowerLeft = projectedPoint - lowerLeftCorner.xyz;
+    float horizontalLengthSquared = max(dot(horizontal.xyz, horizontal.xyz), EPSILON);
+    float verticalLengthSquared = max(dot(vertical.xyz, vertical.xyz), EPSILON);
+    uv = vec2(
+        dot(fromLowerLeft, horizontal.xyz) / horizontalLengthSquared,
+        dot(fromLowerLeft, vertical.xyz) / verticalLengthSquared
+    );
+    return uv.x >= 0.0 && uv.x <= 1.0 && uv.y >= 0.0 && uv.y <= 1.0;
+}
+
+bool reprojectWorldPositionToPreviousUv(vec3 worldPosition, out vec2 uv) {
+    return projectWorldPositionToFrameUv(
+        worldPosition,
+        previousFrameData.origin,
+        previousFrameData.lowerLeftCorner,
+        previousFrameData.horizontal,
+        previousFrameData.vertical,
+        uv
+    );
+}
+
+bool temporalDenoiseEnabled() {
+    return frameData.origin.w > 0.5;
+}
+
+bool temporalHistoryAvailable() {
+    return previousFrameData.origin.w > 0.5;
+}
+
+float temporalCameraStillness() {
+    float translationDelta = length(frameData.origin.xyz - previousFrameData.origin.xyz);
+    vec3 currentForward = frameForward(
+        frameData.origin,
+        frameData.lowerLeftCorner,
+        frameData.horizontal,
+        frameData.vertical
+    );
+    vec3 previousForward = frameForward(
+        previousFrameData.origin,
+        previousFrameData.lowerLeftCorner,
+        previousFrameData.horizontal,
+        previousFrameData.vertical
+    );
+    float rotationDelta = 1.0 - clamp(dot(currentForward, previousForward), 0.0, 1.0);
+    return 1.0 - clamp(translationDelta * 4.0 + rotationDelta * 400.0, 0.0, 1.0);
+}
+
+ivec2 uvToImageCoordinate(vec2 uv, ivec2 imageSizePixels) {
+    vec2 clampedUv = clamp(uv, vec2(0.0), vec2(0.999999));
+    return clamp(ivec2(clampedUv * vec2(imageSizePixels)), ivec2(0), imageSizePixels - 1);
+}
+
+float temporalMaxHistory(float roughness, float metallic, float transmission, float clearcoat) {
+    float historyLength = mix(12.0, 48.0, clamp(roughness, 0.0, 1.0));
+    historyLength *= mix(1.0, 0.85, clamp(metallic, 0.0, 1.0));
+    historyLength *= mix(1.0, 0.6, clamp(transmission, 0.0, 1.0));
+    historyLength *= mix(1.0, 0.8, clamp(clearcoat, 0.0, 1.0));
+    historyLength *= mix(0.5, 1.5, temporalCameraStillness());
+    return clamp(historyLength, 2.0, 64.0);
 }
 
 vec3 customReflect(vec3 incident, vec3 normal) {
@@ -1270,10 +1444,14 @@ vec3 evaluateDirectLighting(
 }
 
 void main() {
-    uint randSeed = (gl_LaunchIDEXT.y * gl_LaunchSizeEXT.x + gl_LaunchIDEXT.x) ^ constants.seed;
+    uint randSeed = 0u;
 
-    float u = (float(gl_LaunchIDEXT.x) + randomFloat(randSeed)) / float(gl_LaunchSizeEXT.x - 1);
-    float v = (float(gl_LaunchIDEXT.y) + randomFloat(randSeed)) / float(gl_LaunchSizeEXT.y - 1);
+    float u = temporalDenoiseEnabled()
+        ? (float(gl_LaunchIDEXT.x) + 0.5) / float(gl_LaunchSizeEXT.x)
+        : (float(gl_LaunchIDEXT.x) + randomFloat(randSeed)) / float(gl_LaunchSizeEXT.x - 1);
+    float v = temporalDenoiseEnabled()
+        ? (float(gl_LaunchIDEXT.y) + 0.5) / float(gl_LaunchSizeEXT.y)
+        : (float(gl_LaunchIDEXT.y) + randomFloat(randSeed)) / float(gl_LaunchSizeEXT.y - 1);
 
     Ray ray = getRay(u, v, randSeed);
     vec3 throughput = vec3(1.0);
@@ -1282,6 +1460,14 @@ void main() {
     float previousBsdfPdf = 1.0;
     bool previousBounceWasDelta = true;
     vec3 previousSurfacePosition = ray.origin;
+
+    bool firstHitValid = false;
+    vec3 firstHitPosition = vec3(0.0);
+    vec3 firstHitNormal = vec3(0.0, 1.0, 0.0);
+    float firstHitRoughness = 1.0;
+    float firstHitMetallic = 0.0;
+    float firstHitTransmission = 0.0;
+    float firstHitClearcoat = 0.0;
 
     vec3 mediumStack[MAX_MEDIUM_DEPTH];
     int mediumStackSize = 0;
@@ -1323,6 +1509,16 @@ void main() {
         uint materialIndex = payload.material;
         uint frontFace = payload.frontFace;
         MaterialData material = matBuffer.materials[materialIndex];
+
+        if (depth == 0) {
+            firstHitValid = true;
+            firstHitPosition = hitPosition;
+            firstHitNormal = normalize(surfaceNormal);
+            firstHitRoughness = materialRoughness(material);
+            firstHitMetallic = materialMetallic(material);
+            firstHitTransmission = materialTransmission(material);
+            firstHitClearcoat = materialClearcoat(material);
+        }
 
         if (maxComponent(material.emission.rgb) > 0.0) {
             vec3 emittedRadiance = material.emission.rgb;
@@ -1390,6 +1586,22 @@ void main() {
         }
     }
 
-    vec4 oldColor = imageLoad(outputImage, ivec2(gl_LaunchIDEXT.xy));
-    imageStore(outputImage, ivec2(gl_LaunchIDEXT.xy), oldColor + vec4(radiance, 1.0));
+    ivec2 pixelCoord = ivec2(gl_LaunchIDEXT.xy);
+    imageStore(
+        currentPositionImage,
+        pixelCoord,
+        vec4(firstHitPosition, firstHitValid ? 1.0 : 0.0)
+    );
+    imageStore(
+        currentNormalRoughnessImage,
+        pixelCoord,
+        vec4(firstHitValid ? firstHitNormal : vec3(0.0), firstHitValid ? firstHitRoughness : 0.0)
+    );
+
+    if (temporalDenoiseEnabled()) {
+        imageStore(outputImage, pixelCoord, vec4(radiance, 1.0));
+    } else {
+        vec4 oldColor = imageLoad(outputImage, pixelCoord);
+        imageStore(outputImage, pixelCoord, oldColor + vec4(radiance, 1.0));
+    }
 }

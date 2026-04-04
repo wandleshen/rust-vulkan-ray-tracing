@@ -5,6 +5,7 @@
 pub mod acceleration_structure;
 pub mod buffer;
 pub mod camera;
+pub mod denoise;
 pub mod environment;
 pub mod image_utils;
 pub mod light;
@@ -19,6 +20,11 @@ pub use buffer::{BufferResource, aligned_size, get_buffer_device_address, get_me
 
 // 相机模块导出
 pub use camera::{CameraState, FrameUniform};
+pub use denoise::{
+    DenoisePipelineResources, DenoisePushConstants, create_denoise_descriptor_pool_and_set,
+    create_denoise_descriptor_set_layout, create_denoise_pipeline, push_constants_bytes,
+    update_denoise_descriptor_set,
+};
 
 pub use environment::{
     ENV_MAP_HEIGHT, ENV_MAP_WIDTH, EnvironmentMapData, generate_environment_map,
@@ -33,8 +39,8 @@ pub use light::{
 
 // 图像工具导出
 pub use image_utils::{
-    RenderTargetImage, copy_image_to_host, create_host_visible_image, save_image_to_png,
-    transition_image_to_general,
+    RenderTargetImage, copy_image_to_host, copy_image_to_image, create_host_visible_image,
+    save_image_to_png, transition_image_to_general,
 };
 
 // 材质导出
