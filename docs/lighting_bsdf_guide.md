@@ -103,9 +103,9 @@ CPU 侧会为每个光源估算一个“采样功率”：
 
 然后对这些功率归一化，得到光源选择 PMF：
 
-\[
+$$
 P(L_i) = \frac{w_i}{\sum_j w_j}
-\]
+$$
 
 再累积为 CDF，供 shader 在 `sampleLight(...)` 中按概率选灯。
 
@@ -122,9 +122,9 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 
 环境图的权重定义为：
 
-\[
+$$
  w(x,y) = L(x,y) \cdot \sin\theta
-\]
+$$
 
 其中：
 
@@ -224,9 +224,9 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 
 这非常重要，因为后续 BSDF 计算都假设：
 
-\[
+$$
 \mathbf{n} \cdot \mathbf{w_i} > 0
-\]
+$$
 
 其中 `wi = -incomingDirection`。
 
@@ -257,9 +257,9 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 2. 在该光源内部执行条件采样；
 3. 返回 **总 PDF**：
 
-\[
+$$
  p(\omega) = P(L_i) \cdot p(\omega \mid L_i)
-\]
+$$
 
 这正是“多光源统一采样”的核心。
 
@@ -271,15 +271,15 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 - 条件 PDF 视为 1
 - 总 PDF 为：
 
-\[
+$$
  p = P(L_{point})
-\]
+$$
 
 其辐射强度按反平方衰减：
 
-\[
+$$
  L = \frac{I}{r^2}
-\]
+$$
 
 ### 6.3 平行光
 
@@ -295,15 +295,15 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 
 - 面面积 PDF：
 
-\[
+$$
  p_A = \frac{1}{4\pi r^2}
-\]
+$$
 
 - 再转成方向域 PDF：
 
-\[
+$$
  p_\omega = p_A \cdot \frac{d^2}{|n_l \cdot (-\omega)|}
-\]
+$$
 
 其中：
 
@@ -313,9 +313,9 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 
 总 PDF 为：
 
-\[
+$$
  p = P(L_{area}) \cdot p_\omega
-\]
+$$
 
 ### 6.5 环境光
 
@@ -332,21 +332,21 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 
 方向域 PDF 为：
 
-\[
+$$
  p_\omega(\omega) = \frac{p_{texel}(x,y)}{\Delta \omega_{x,y}}
-\]
+$$
 
 其中 texel 对应的球面立体角：
 
-\[
+$$
  \Delta \omega_{x,y} = \Delta \phi \cdot (\cos\theta_0 - \cos\theta_1)
-\]
+$$
 
 总 PDF 则为：
 
-\[
+$$
  p(\omega) = P(L_{env}) \cdot p_\omega(\omega)
-\]
+$$
 
 这正是当前实现中 `lightPdfForMiss(...)` 的基础。
 
@@ -375,21 +375,21 @@ P(L_i) = \frac{w_i}{\sum_j w_j}
 
 漫反射实现是经典 Lambert：
 
-\[
+$$
  f_d = \frac{c_{base}}{\pi}
-\]
+$$
 
 其采样采用 cosine-weighted hemisphere：
 
-\[
+$$
  p_d(\omega_o) = \frac{\max(n \cdot \omega_o, 0)}{\pi}
-\]
+$$
 
 Diffuse 的整体权重由：
 
-\[
+$$
  w_d = (1 - metallic)(1 - transmission)
-\]
+$$
 
 控制。
 
@@ -397,9 +397,9 @@ Diffuse 的整体权重由：
 
 镜面反射实现采用 Cook-Torrance + GGX：
 
-\[
+$$
  f_r = \frac{D(h)G(\omega_i, \omega_o)F(\omega_i, h)}{4|n \cdot \omega_i||n \cdot \omega_o|}
-\]
+$$
 
 其中：
 
@@ -409,15 +409,15 @@ Diffuse 的整体权重由：
 
 `F0` 的构造方式为：
 
-\[
+$$
  F_0 = mix(F_{0,dielectric}, baseColor, metallic)
-\]
+$$
 
 其中 dielectric 的 `F0` 来自 IOR：
 
-\[
+$$
  F_{0,dielectric} = \left(\frac{ior - 1}{ior + 1}\right)^2
-\]
+$$
 
 因此当前实现已经不是“只有金属才有镜面”，而是 **非金属也有物理意义上的 Fresnel 反射**。
 
@@ -427,16 +427,16 @@ Diffuse 的整体权重由：
 
 代码会先根据：
 
-\[
+$$
  h = normalize(w_i + \eta w_o)
-\]
+$$
 
 构造折射半向量，再计算近似 BTDF：
 
-\[
+$$
  f_t \propto (1 - F)DG \cdot \eta^2
 \cdot \frac{|(w_i \cdot h)(w_o \cdot h)|}{|n \cdot w_i||n \cdot w_o|(w_i \cdot h + \eta w_o \cdot h)^2}
-\]
+$$
 
 当前实现中还乘了：
 
@@ -477,9 +477,9 @@ Diffuse 的整体权重由：
 
 BSDF 并不是对某一个 lobe 采样，而是先构造一个离散混合分布：
 
-\[
+$$
 P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
-\]
+$$
 
 当前实现考虑的权重包括：
 
@@ -498,15 +498,15 @@ P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
 
 因此，对于同半球反射：
 
-\[
+$$
  p(\omega_o) = P_d p_d + P_s p_s + P_c p_c
-\]
+$$
 
 对于异半球透射：
 
-\[
+$$
  p(\omega_o) = P_t p_t
-\]
+$$
 
 这个设计直接对应代码中的 `pdfBSDF(...)`。
 
@@ -514,9 +514,9 @@ P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
 
 对于非 delta 样本，吞吐量更新为：
 
-\[
+$$
  throughput \leftarrow throughput \cdot \frac{f(\omega_i, \omega_o) |n \cdot \omega_o|}{p(\omega_o)}
-\]
+$$
 
 这正是 `BsdfSample.weight` 的来源。
 
@@ -526,9 +526,9 @@ P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
 
 当前实现使用 **power heuristic**：
 
-\[
+$$
  w_a = \frac{p_a^2}{p_a^2 + p_b^2}
-\]
+$$
 
 使用点主要有两处：
 
@@ -554,9 +554,9 @@ P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
 
 均匀吸收介质使用 Beer-Lambert：
 
-\[
+$$
  T(d) = e^{-\sigma_a d}
-\]
+$$
 
 其中：
 
@@ -571,9 +571,9 @@ P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
 - 透射离开物体时 pop；
 - 在每次命中后，根据 `payload.distance` 对 throughput 乘上：
 
-\[
+$$
  throughput *= e^{-\sigma_a d}
-\]
+$$
 
 这意味着：
 
@@ -599,16 +599,16 @@ P(lobe) = \frac{w_{lobe}}{\sum_k w_k}
 
 因此当前实现使用：
 
-\[
+$$
  p_{rr} = clamp(max(throughput.r, throughput.g, throughput.b), 0.05, 0.95)
-\]
+$$
 
 - 若随机数大于 `p_rr`，路径终止；
 - 否则：
 
-\[
+$$
  throughput /= p_{rr}
-\]
+$$
 
 这样可以保证估计仍然无偏，同时减少长路径开销。
 
@@ -846,9 +846,9 @@ depth == 0 || previousBounceWasDelta
 
 在当前实现里，`lightPdfForMiss(...)` 包含两层含义：
 
-\[
+$$
 p_{light}(\omega) = P(L_{env}) \cdot p(\omega \mid L_{env})
-\]
+$$
 
 其中：
 
@@ -883,9 +883,9 @@ MIS 需要同时知道两条采样路径的概率：
 
 当前实现使用的是 power heuristic：
 
-\[
+$$
 w = \frac{p_{bsdf}^2}{p_{bsdf}^2 + p_{light}^2}
-\]
+$$
 
 也就是说：
 

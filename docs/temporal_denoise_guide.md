@@ -179,9 +179,9 @@
 
 成像平面中心为：
 
-\[
+$$
 \mathbf{c} = \mathbf{ll} + 0.5\,\mathbf{h} + 0.5\,\mathbf{v}
-\]
+$$
 
 其中：
 
@@ -191,15 +191,15 @@
 
 相机前向方向为：
 
-\[
+$$
 \mathbf{f} = \frac{\mathbf{c} - \mathbf{o}}{\|\mathbf{c} - \mathbf{o}\|}
-\]
+$$
 
 焦平面距离为：
 
-\[
+$$
 D_f = \|\mathbf{c} - \mathbf{o}\|
-\]
+$$
 
 对应实现：
 
@@ -210,39 +210,39 @@ D_f = \|\mathbf{c} - \mathbf{o}\|
 
 给定当前像素的首次命中世界坐标 `p`，首先计算相对相机原点的向量：
 
-\[
+$$
 \mathbf{r} = \mathbf{p} - \mathbf{o}
-\]
+$$
 
 再将其沿相机前向方向投影，得到深度：
 
-\[
+$$
 z = \mathbf{r} \cdot \mathbf{f}
-\]
+$$
 
 如果 `z <= \varepsilon`，则认为该点位于相机背后，投影失败。
 
 若投影有效，则将该点缩放到焦平面上：
 
-\[
+$$
 \mathbf{p}_{proj} = \mathbf{o} + \mathbf{r} \cdot \frac{D_f}{z}
-\]
+$$
 
 然后相对成像平面左下角求偏移：
 
-\[
+$$
 \mathbf{q} = \mathbf{p}_{proj} - \mathbf{ll}
-\]
+$$
 
 最后沿 `horizontal` 和 `vertical` 投影得到 UV：
 
-\[
+$$
 u = \frac{\mathbf{q} \cdot \mathbf{h}}{\mathbf{h} \cdot \mathbf{h}}
-\]
+$$
 
-\[
+$$
 v = \frac{\mathbf{q} \cdot \mathbf{v}}{\mathbf{v} \cdot \mathbf{v}}
-\]
+$$
 
 只有当：
 
@@ -312,15 +312,15 @@ previousFrameData.origin.w > 0.5
 
 重投影到 `previousCoord` 之后，会比较历史位置 `p_prev` 与当前位置 `p_curr`：
 
-\[
+$$
 E_p = \|\mathbf{p}_{prev} - \mathbf{p}_{curr}\|
-\]
+$$
 
 当前实现的位置容差不是固定常数，而是随视距和粗糙度变化：
 
-\[
+$$
 T_p = \max(0.02, \operatorname{mix}(0.01, 0.03, r) \cdot \max(d_{view}, 1.0))
-\]
+$$
 
 其中：
 
@@ -345,15 +345,15 @@ float positionError = length(previousPositionData.xyz - currentPositionData.xyz)
 
 还会比较当前法线与历史法线的夹角一致性：
 
-\[
+$$
 A_n = \mathbf{n}_{prev} \cdot \mathbf{n}_{curr}
-\]
+$$
 
 阈值同样由粗糙度控制：
 
-\[
+$$
 T_n = \operatorname{mix}(0.98, 0.85, r)
-\]
+$$
 
 对应代码：
 
@@ -405,17 +405,17 @@ normalAlignment >= normalThreshold
 
 对于邻域中的每个颜色样本 `c_i`，计算：
 
-\[
+$$
 \mu = \frac{1}{N} \sum_i c_i
-\]
+$$
 
-\[
+$$
 M_2 = \frac{1}{N} \sum_i c_i^2
-\]
+$$
 
-\[
+$$
 \sigma = \sqrt{\max(M_2 - \mu^2, 0)}
-\]
+$$
 
 这里：
 
@@ -437,21 +437,21 @@ stats.sigma = sqrt(max(secondMoment - mean * mean, vec3(0.0)));
 
 亮度定义为：
 
-\[
+$$
 L = 0.2126 R + 0.7152 G + 0.0722 B
-\]
+$$
 
 邻域亮度均值：
 
-\[
+$$
 \mu_L = \frac{1}{N} \sum_i L_i
-\]
+$$
 
 邻域亮度方差：
 
-\[
+$$
 \sigma_L^2 = \max\left(\frac{1}{N}\sum_i L_i^2 - \mu_L^2, 0\right)
-\]
+$$
 
 对应代码：
 
@@ -474,13 +474,13 @@ stats.lumaVariance = max(lumaSecondMoment - lumaMean * lumaMean, 0.0);
 
 当前实现中：
 
-\[
+$$
 C_{min} = \mu - 2.5\sigma - b
-\]
+$$
 
-\[
+$$
 C_{max} = \mu + 2.5\sigma + b
-\]
+$$
 
 其中偏置项为：
 
@@ -490,9 +490,9 @@ vec3 clampBias = vec3(0.05);
 
 然后执行：
 
-\[
+$$
 C_{hist}^{clamped} = \operatorname{clamp}(C_{hist}, C_{min}, C_{max})
-\]
+$$
 
 对应代码：
 
@@ -518,21 +518,21 @@ vec3 clampedHistory = clamp(historyData.rgb, clampMin, clampMax);
 
 平移变化：
 
-\[
+$$
 \Delta_t = \|o_{curr} - o_{prev}\|
-\]
+$$
 
 朝向变化用前向向量点乘近似：
 
-\[
+$$
 \Delta_r = 1 - \operatorname{clamp}(f_{curr} \cdot f_{prev}, 0, 1)
-\]
+$$
 
 再组合成相机静止度：
 
-\[
+$$
 S = 1 - \operatorname{clamp}(4\Delta_t + 400\Delta_r, 0, 1)
-\]
+$$
 
 对应实现：
 
@@ -544,9 +544,9 @@ S = 1 - \operatorname{clamp}(4\Delta_t + 400\Delta_r, 0, 1)
 
 最大历史长度同时依赖粗糙度与相机静止度：
 
-\[
+$$
 H_{max} = \operatorname{clamp}(\operatorname{mix}(12, 48, r) \cdot \operatorname{mix}(0.5, 1.5, S), 2, 64)
-\]
+$$
 
 对应实现：
 
@@ -562,21 +562,21 @@ H_{max} = \operatorname{clamp}(\operatorname{mix}(12, 48, r) \cdot \operatorname
 
 如果历史通过验证，则：
 
-\[
+$$
 H_t = \min(H_{prev} + 1, H_{max})
-\]
+$$
 
 再由历史长度构造混合权重：
 
-\[
+$$
 w_h = \frac{H_{prev}}{H_t}
-\]
+$$
 
 最后执行时域混合：
 
-\[
+$$
 C_t = (1 - w_h) C_{current} + w_h C_{hist}^{clamped}
-\]
+$$
 
 对应代码：
 
@@ -623,19 +623,19 @@ temporalColor = mix(currentColor, clampedHistory, historyWeight);
 
 当前帧颜色亮度为：
 
-\[
+$$
 L_t = \operatorname{luminance}(C_{current})
-\]
+$$
 
 若没有历史可用，则初始化为：
 
-\[
+$$
 M_{1,t} = L_t
-\]
+$$
 
-\[
+$$
 M_{2,t} = L_t^2
-\]
+$$
 
 对应初始化代码：
 
@@ -650,13 +650,13 @@ float filteredVariance = max(stats.lumaVariance, 1e-6);
 
 如果历史有效，则亮度矩按和颜色相同的时域权重进行更新：
 
-\[
+$$
 M_{1,t} = (1 - w_h)L_t + w_h M_{1,prev}
-\]
+$$
 
-\[
+$$
 M_{2,t} = (1 - w_h)L_t^2 + w_h M_{2,prev}
-\]
+$$
 
 对应代码：
 
@@ -674,15 +674,15 @@ filteredM2 = mix(currentLuma * currentLuma, previousMoments.y, historyWeight);
 
 亮度方差通过标准关系恢复：
 
-\[
+$$
 \sigma_t^2 = M_{2,t} - M_{1,t}^2
-\]
+$$
 
 但当前实现没有直接把它作为最终方差，而是又与当前邻域亮度方差做了一个下界比较：
 
-\[
+$$
 variance_t = \max(M_{2,t} - M_{1,t}^2, 0.25 \cdot variance_{neighborhood})
-\]
+$$
 
 对应代码：
 
@@ -739,9 +739,9 @@ imageStore(currentMomentsImage, pixelCoord, vec4(filteredM1, filteredM2, filtere
 
 第 `k` 轮 `a-trous` 的步长定义为：
 
-\[
+$$
 stepWidth = 2^k
-\]
+$$
 
 CPU 侧通过 push constant 写入：
 
@@ -765,9 +765,9 @@ step_width: 1u32 << iteration
 
 当前使用的是归一化后的 `1 4 6 4 1` 核：
 
-\[
+$$
 \left[\frac{1}{16}, \frac{1}{4}, \frac{3}{8}, \frac{1}{4}, \frac{1}{16}\right]
-\]
+$$
 
 实现函数：
 
@@ -775,9 +775,9 @@ step_width: 1u32 << iteration
 
 二维基础权重为：
 
-\[
+$$
 w_{base}(x, y) = k(x) \cdot k(y)
-\]
+$$
 
 对应代码：
 
@@ -789,9 +789,9 @@ float weight = kernelWeight(x + 2) * kernelWeight(y + 2);
 
 如果中心像素和邻域像素都有效，则会计算沿中心法线方向的深度差：
 
-\[
+$$
 \Delta_d = |(p_s - p_c) \cdot n_c|
-\]
+$$
 
 对应代码：
 
@@ -801,15 +801,15 @@ abs(dot(samplePositionData.xyz - centerPositionData.xyz, centerNormal))
 
 深度 sigma 为：
 
-\[
+$$
 \sigma_d = \max(0.01, \operatorname{mix}(0.01, 0.10, r) \cdot \max(d_{view}, 1.0))
-\]
+$$
 
 深度权重为：
 
-\[
+$$
 w_d = \exp\left(-\frac{\Delta_d}{\sigma_d}\right)
-\]
+$$
 
 对应代码：
 
@@ -830,17 +830,17 @@ float depthWeight = exp(
 
 法线权重使用中心法线与邻域法线的点乘，并由粗糙度调节指数：
 
-\[
+$$
 E_n = \max(n_c \cdot n_s, 0)
-\]
+$$
 
-\[
+$$
 \gamma_n = \operatorname{mix}(256, 24, r)
-\]
+$$
 
-\[
+$$
 w_n = E_n^{\gamma_n}
-\]
+$$
 
 对应代码：
 
@@ -858,9 +858,9 @@ float normalWeight = pow(max(dot(centerNormal, sampleNormal), 0.0), normalExpone
 
 颜色项使用亮度差，而不是 RGB 欧氏距离：
 
-\[
+$$
 \Delta_L = |L_s - L_c|
-\]
+$$
 
 对应代码：
 
@@ -870,15 +870,15 @@ float colorDelta = abs(luminance(sampleData.rgb) - luminance(centerColor));
 
 颜色 sigma 由当前像素方差和粗糙度共同控制：
 
-\[
+$$
 \sigma_c = \max(0.01, \operatorname{mix}(0.015, 1.5\sqrt{variance_c} + 0.01, roughnessFilterStrength))
-\]
+$$
 
 颜色权重为：
 
-\[
+$$
 w_c = \exp\left(-\frac{\Delta_L}{\sigma_c}\right)
-\]
+$$
 
 对应代码：
 
@@ -896,9 +896,9 @@ float colorWeight = exp(-colorDelta / colorSigma);
 
 因此一个邻域样本最终的权重为：
 
-\[
+$$
 w_i = w_{base} \cdot w_d \cdot w_n \cdot w_c
-\]
+$$
 
 对应代码中就是对 `weight` 连续累乘：
 
@@ -933,15 +933,15 @@ float filterStrength = 0.45
 
 首先做归一化加权平均：
 
-\[
+$$
 C_{filtered} = \frac{\sum_i w_i C_i}{\sum_i w_i}
-\]
+$$
 
 然后和中心颜色做一次线性混合：
 
-\[
+$$
 C_{final} = (1 - s) C_{center} + s C_{filtered}
-\]
+$$
 
 其中 `s = filterStrength`。
 
